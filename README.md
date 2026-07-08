@@ -85,18 +85,26 @@ Swagger UI is available at `http://localhost:8000/docs`.
 Create a brand-new PostgreSQL database named `email_tracking_v2` before
 deploying V2. Set only that database's connection string as `DATABASE_URL`.
 
-At application startup, SQLAlchemy calls `Base.metadata.create_all()` and
-`AttachmentBase.metadata.create_all()` using `DATABASE_URL`. This creates the
-required V2 tables if they do not exist; no manual SQL or migration command is
-required for this phase. Existing tables and rows inside the V2 database are
-left intact.
+At application startup, the service creates required base tables when absent and
+then automatically runs all pending Alembic migrations, equivalent to:
+
+```powershell
+alembic upgrade head
+```
+
+No manual migration step is required when Version 2 starts. Existing tables and
+rows inside the V2 database are left intact.
 
 The table contains:
 
 - `id` as its primary key and unique `tracking_id`
-- `recipient_email` and `sender_email`
+- `recipient_email`, `sender_email`, and `sender_mail`
 - `open_count` and `click_count`
+- `download_count` and `reply_count`
 - `first_open`, `last_open`, `first_click`, and `last_click`
+- `first_download`, `last_download`, `first_reply`, and `last_reply`
+- `mail_subject`, `project_name`, `excel_file_path`, and `excel_file_name`
+- `last_synchronize_time`
 - `created_at` and `updated_at`
 - `last_ip` and `user_agent`
 
@@ -109,21 +117,26 @@ The `attachments` table includes the nullable `file_data` column used for
 PostgreSQL BYTEA attachment storage. Existing metadata columns remain present
 for backward compatibility and future V2 features.
 
-Version 2 database changes are managed with Alembic. Run migrations against the
-V2 database only:
+Version 2 database changes are managed with Alembic and run automatically at
+startup. The migrations extend the existing `email_tracking` table with nullable
+metadata and summary columns:
 
-```powershell
-alembic upgrade head
-```
-
-The first V2 migration extends the existing `email_tracking` table with nullable
-metadata columns:
-
+- `sender_mail`
 - `mail_subject`
 - `project_name`
 - `excel_file_path`
 - `excel_file_name`
 - `last_synchronize_time`
+- `download_count`
+- `first_download`
+- `last_download`
+- `reply_count`
+- `first_reply`
+- `last_reply`
+
+The download and reply summary columns are initialized for compatibility but are
+not independently updated by the current open, click, attachment-download, or
+synchronization flows.
 
 For each successful Excel open update, PostgreSQL receives an atomic upsert with
 the resulting Excel `OpenCount`. An existing database row retains `first_open`
@@ -214,10 +227,10 @@ Request:
 }
 ```
 
-The server stores `sender_mail` and `recipient_mail` in the existing
-`sender_email` and `recipient_email` columns. It derives `excel_file_name`
-automatically from `excel_file_path`; EmailAutomation V2 does not send the
-filename separately.
+The server stores `sender_mail` in the V2 `sender_mail` column and mirrors it to
+`sender_email` for compatibility. It stores `recipient_mail` in
+`recipient_email`. It derives `excel_file_name` automatically from
+`excel_file_path`; EmailAutomation V2 does not send the filename separately.
 
 All new metadata fields are nullable. Existing clients that do not send these
 fields continue working unchanged.

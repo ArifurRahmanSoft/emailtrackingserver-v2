@@ -57,6 +57,7 @@ def test_sent_email_registration_populates_new_v2_columns(
     assert result.excel_file_name == "mail_list.xlsx"
     assert record is not None
     assert record.sender_email == "sender@example.com"
+    assert record.sender_mail == "sender@example.com"
     assert record.recipient_email == "recipient@example.com"
     assert record.mail_subject == "Quarterly Update"
     assert record.project_name == "Q3 Outreach"
@@ -118,6 +119,7 @@ def test_missing_v2_metadata_remains_null_for_backward_compatibility(
 
     assert record is not None
     assert record.sender_email is None
+    assert record.sender_mail is None
     assert record.recipient_email is None
     assert record.mail_subject is None
     assert record.project_name is None

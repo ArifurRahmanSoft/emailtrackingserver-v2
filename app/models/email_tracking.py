@@ -19,11 +19,30 @@ class EmailTracking(Base):
     tracking_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     recipient_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     sender_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    sender_mail: Mapped[str | None] = mapped_column(String(320), nullable=True)
     mail_subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
     project_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     excel_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     excel_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_synchronize_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    download_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0, server_default="0"
+    )
+    first_download: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_download: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reply_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0, server_default="0"
+    )
+    first_reply: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_reply: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

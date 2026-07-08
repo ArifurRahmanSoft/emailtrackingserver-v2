@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import TrackingAttachment
 from app.models.email_tracking import Base, EmailTracking
+from app.services.alembic_migrations import run_pending_migrations
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -87,9 +88,10 @@ class DatabaseTrackingService:
         return self._engine is not None
 
     def initialize(self) -> None:
-        """Create all ORM tables and verify the database connection."""
+        """Create base tables, run pending migrations, and verify the connection."""
         engine = self._require_engine()
         Base.metadata.create_all(engine)
+        run_pending_migrations(self._database_url or str(engine.url))
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
 
@@ -215,6 +217,9 @@ class DatabaseTrackingService:
                     session.add(record)
 
                 record.sender_email = self._clean_optional(
+                    registration.sender_mail
+                )
+                record.sender_mail = self._clean_optional(
                     registration.sender_mail
                 )
                 record.recipient_email = self._clean_optional(
