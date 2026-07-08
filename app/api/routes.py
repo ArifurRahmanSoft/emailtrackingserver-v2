@@ -14,8 +14,16 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from app.models.statistics import SampleStatistics
+from app.models.sent_email_registration import (
+    SentEmailRegistrationRequest,
+    SentEmailRegistrationResponse,
+)
 from app.models.tracking_sync import TrackingSyncRecord
-from app.services.database_tracking import DatabaseTrackingService
+from app.services.database_tracking import (
+    DatabaseTrackingService,
+    DatabaseUnavailableError,
+    SentEmailRegistration,
+)
 from app.services.excel_tracking import ExcelTrackingService
 from app.services.tracking_debug import TrackingDebugService
 from app.services.tracking_pixel import get_transparent_pixel
@@ -48,6 +56,63 @@ TrackingId = Annotated[
 async def health_check() -> dict[str, str]:
     """Return a lightweight liveness response."""
     return {"status": "ok"}
+
+
+@router.post(
+    "/api/tracking/register-send",
+    tags=["Tracking"],
+    summary="Register sent-email tracking metadata",
+    response_model=SentEmailRegistrationResponse,
+)
+async def register_sent_email(
+    payload: SentEmailRegistrationRequest,
+) -> SentEmailRegistrationResponse:
+    """Register V2 email-send metadata without changing tracking counters."""
+    tracking_id = payload.tracking_id.strip()
+    if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid tracking_id.",
+        )
+
+    try:
+        result = await run_in_threadpool(
+            database_service.register_sent_email,
+            SentEmailRegistration(
+                tracking_id=tracking_id,
+                sender_mail=payload.sender_mail,
+                recipient_mail=payload.recipient_mail,
+                mail_subject=payload.mail_subject,
+                project_name=payload.project_name,
+                excel_file_path=payload.excel_file_path,
+            ),
+        )
+    except DatabaseUnavailableError as exc:
+        logger.error(
+            "Sent email registration failed: tracking_id=%s error=%s",
+            tracking_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Tracking registration is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Sent email registered: tracking_id=%s sender_mail=%s recipient_mail=%s "
+        "project_name=%s excel_file_name=%s",
+        tracking_id,
+        payload.sender_mail,
+        payload.recipient_mail,
+        payload.project_name,
+        result.excel_file_name,
+    )
+    return SentEmailRegistrationResponse(
+        success=True,
+        tracking_id=result.tracking_id,
+        excel_file_name=result.excel_file_name,
+    )
 
 
 @router.get(

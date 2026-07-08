@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -19,6 +19,13 @@ class EmailTracking(Base):
     tracking_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     recipient_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     sender_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    mail_subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
+    project_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    excel_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    excel_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_synchronize_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     click_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     first_open: Mapped[datetime | None] = mapped_column(

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import PurePath, PureWindowsPath
 
 from sqlalchemy import Engine, create_engine, func, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -32,6 +33,26 @@ class ClickUpdateResult:
     click_count: int
     first_click: datetime
     last_click: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SentEmailRegistration:
+    """Metadata captured by Version 2 immediately after a successful send."""
+
+    tracking_id: str
+    sender_mail: str | None = None
+    recipient_mail: str | None = None
+    mail_subject: str | None = None
+    project_name: str | None = None
+    excel_file_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SentEmailRegistrationResult:
+    """Result of registering one sent email tracking row."""
+
+    tracking_id: str
+    excel_file_name: str | None
 
 
 class DatabaseTrackingService:
@@ -157,6 +178,71 @@ class DatabaseTrackingService:
                 f"Unable to update PostgreSQL click record: {exc}"
             ) from exc
 
+    def register_sent_email(
+        self,
+        registration: SentEmailRegistration,
+        registered_at: datetime | None = None,
+    ) -> SentEmailRegistrationResult:
+        """Insert or update the tracking row after a successful V2 email send.
+
+        Existing open, click, and download counters are intentionally left
+        unchanged. New V2 metadata remains nullable so older send clients and
+        historical rows stay backward compatible.
+        """
+        tracking_id = registration.tracking_id.strip()
+        if not tracking_id:
+            raise ValueError("tracking_id must not be empty.")
+
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(registered_at or datetime.now(timezone.utc))
+        excel_file_path = self._clean_optional(registration.excel_file_path)
+        excel_file_name = self._derive_excel_file_name(excel_file_path)
+
+        try:
+            with session_factory() as session:
+                record = session.scalar(
+                    select(EmailTracking)
+                    .where(EmailTracking.tracking_id == tracking_id)
+                    .with_for_update()
+                )
+                if record is None:
+                    record = EmailTracking(
+                        tracking_id=tracking_id,
+                        open_count=0,
+                        click_count=0,
+                        created_at=timestamp,
+                    )
+                    session.add(record)
+
+                record.sender_email = self._clean_optional(
+                    registration.sender_mail
+                )
+                record.recipient_email = self._clean_optional(
+                    registration.recipient_mail
+                )
+                record.mail_subject = self._clean_optional(
+                    registration.mail_subject
+                )
+                record.project_name = self._clean_optional(
+                    registration.project_name
+                )
+                record.excel_file_path = excel_file_path
+                record.excel_file_name = excel_file_name
+                record.last_synchronize_time = None
+                record.updated_at = timestamp
+                session.commit()
+
+                return SentEmailRegistrationResult(
+                    tracking_id=tracking_id,
+                    excel_file_name=excel_file_name,
+                )
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to register sent email tracking row: {exc}"
+            ) from exc
+
     def get_status(self) -> DatabaseStatus:
         """Return connection, table, and row-count diagnostics."""
         if self._engine is None or self._session_factory is None:
@@ -279,3 +365,20 @@ class DatabaseTrackingService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    @staticmethod
+    def _clean_optional(value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @classmethod
+    def _derive_excel_file_name(cls, excel_file_path: str | None) -> str | None:
+        """Return the final filename from Windows or POSIX-style paths."""
+        cleaned_path = cls._clean_optional(excel_file_path)
+        if cleaned_path is None:
+            return None
+        if "\\" in cleaned_path or ":" in cleaned_path:
+            return PureWindowsPath(cleaned_path).name or None
+        return PurePath(cleaned_path).name or None

@@ -109,6 +109,22 @@ The `attachments` table includes the nullable `file_data` column used for
 PostgreSQL BYTEA attachment storage. Existing metadata columns remain present
 for backward compatibility and future V2 features.
 
+Version 2 database changes are managed with Alembic. Run migrations against the
+V2 database only:
+
+```powershell
+alembic upgrade head
+```
+
+The first V2 migration extends the existing `email_tracking` table with nullable
+metadata columns:
+
+- `mail_subject`
+- `project_name`
+- `excel_file_path`
+- `excel_file_name`
+- `last_synchronize_time`
+
 For each successful Excel open update, PostgreSQL receives an atomic upsert with
 the resulting Excel `OpenCount`. An existing database row retains `first_open`
 while `open_count`, `last_open`, `last_ip`, `user_agent`, and `updated_at` are
@@ -175,6 +191,36 @@ This allows the desktop application to match rows in `mail_list.xlsx` by
 `TrackingId`. After a successful synchronization, the application should store
 the newest returned `updated_at` value and pass it as the next request's
 `updated_after` cursor. Invalid timestamps return HTTP 400.
+
+## V2 sent-email registration
+
+After EmailAutomation V2 successfully sends an email, it can register the
+tracking row with:
+
+```text
+POST /api/tracking/register-send
+```
+
+Request:
+
+```json
+{
+  "tracking_id": "sent-email-123",
+  "sender_mail": "sender@example.com",
+  "recipient_mail": "recipient@example.com",
+  "mail_subject": "Quarterly Update",
+  "project_name": "Q3 Outreach",
+  "excel_file_path": "F:\\CODEX\\EmailAutomation\\data\\mail_list.xlsx"
+}
+```
+
+The server stores `sender_mail` and `recipient_mail` in the existing
+`sender_email` and `recipient_email` columns. It derives `excel_file_name`
+automatically from `excel_file_path`; EmailAutomation V2 does not send the
+filename separately.
+
+All new metadata fields are nullable. Existing clients that do not send these
+fields continue working unchanged.
 
 ## Attachment Library
 
