@@ -11,6 +11,7 @@ import app.api.routes as route_module
 from app.models.email_tracking import Base, EmailTracking
 from app.services.database_tracking import (
     DatabaseTrackingService,
+    DatabaseUnavailableError,
     SentEmailRegistration,
     SentEmailRegistrationResult,
 )
@@ -145,6 +146,19 @@ class FakeRegistrationDatabase:
         )
 
 
+class FailingRegistrationDatabase:
+    """Endpoint fake that raises the configured registration error."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def register_sent_email(
+        self,
+        registration: SentEmailRegistration,
+    ) -> SentEmailRegistrationResult:
+        raise self.error
+
+
 def test_register_send_endpoint_accepts_v2_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -173,6 +187,35 @@ def test_register_send_endpoint_accepts_v2_request(
     assert database.registrations[0].project_name == "Q3 Outreach"
 
 
+def test_register_send_endpoint_logs_request_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = FakeRegistrationDatabase()
+    logged_messages: list[str] = []
+
+    def capture_info(message: str, *args: object, **_: object) -> None:
+        logged_messages.append(message % args)
+
+    monkeypatch.setattr(route_module, "database_service", database)
+    monkeypatch.setattr(route_module.logger, "info", capture_info)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tracking/register-send",
+        json={
+            "tracking_id": TRACKING_ID,
+            "sender_mail": "sender@example.com",
+            "recipient_mail": "recipient@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert any("Register-send request received" in item for item in logged_messages)
+    assert any(TRACKING_ID in item for item in logged_messages)
+    assert any("sender@example.com" in item for item in logged_messages)
+    assert any("recipient@example.com" in item for item in logged_messages)
+
+
 def test_register_send_endpoint_rejects_invalid_tracking_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -187,3 +230,29 @@ def test_register_send_endpoint_rejects_invalid_tracking_id(
 
     assert response.status_code == 400
     assert database.registrations == []
+
+
+def test_register_send_endpoint_logs_database_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = FailingRegistrationDatabase(
+        DatabaseUnavailableError("database offline")
+    )
+    exception_messages: list[str] = []
+
+    def capture_exception(message: str, *args: object, **_: object) -> None:
+        exception_messages.append(message % args)
+
+    monkeypatch.setattr(route_module, "database_service", database)
+    monkeypatch.setattr(route_module.logger, "exception", capture_exception)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/tracking/register-send",
+        json={"tracking_id": TRACKING_ID},
+    )
+
+    assert response.status_code == 503
+    assert any(
+        "Sent email registration failed" in item for item in exception_messages
+    )

@@ -68,14 +68,21 @@ async def register_sent_email(
     payload: SentEmailRegistrationRequest,
 ) -> SentEmailRegistrationResponse:
     """Register V2 email-send metadata without changing tracking counters."""
-    tracking_id = payload.tracking_id.strip()
-    if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid tracking_id.",
-        )
-
+    logger.info(
+        "Register-send request received: tracking_id=%s sender_mail=%s "
+        "recipient_mail=%s",
+        payload.tracking_id,
+        payload.sender_mail,
+        payload.recipient_mail,
+    )
     try:
+        tracking_id = payload.tracking_id.strip()
+        if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid tracking_id.",
+            )
+
         result = await run_in_threadpool(
             database_service.register_sent_email,
             SentEmailRegistration(
@@ -87,32 +94,49 @@ async def register_sent_email(
                 excel_file_path=payload.excel_file_path,
             ),
         )
-    except DatabaseUnavailableError as exc:
-        logger.error(
-            "Sent email registration failed: tracking_id=%s error=%s",
+
+        logger.info(
+            "Sent email registered: tracking_id=%s sender_mail=%s recipient_mail=%s "
+            "project_name=%s excel_file_name=%s",
             tracking_id,
+            payload.sender_mail,
+            payload.recipient_mail,
+            payload.project_name,
+            result.excel_file_name,
+        )
+        return SentEmailRegistrationResponse(
+            success=True,
+            tracking_id=result.tracking_id,
+            excel_file_name=result.excel_file_name,
+        )
+    except DatabaseUnavailableError as exc:
+        logger.exception(
+            "Sent email registration failed: tracking_id=%s error=%s",
+            payload.tracking_id,
             exc,
-            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Tracking registration is temporarily unavailable.",
         ) from exc
-
-    logger.info(
-        "Sent email registered: tracking_id=%s sender_mail=%s recipient_mail=%s "
-        "project_name=%s excel_file_name=%s",
-        tracking_id,
-        payload.sender_mail,
-        payload.recipient_mail,
-        payload.project_name,
-        result.excel_file_name,
-    )
-    return SentEmailRegistrationResponse(
-        success=True,
-        tracking_id=result.tracking_id,
-        excel_file_name=result.excel_file_name,
-    )
+    except HTTPException:
+        logger.exception(
+            "Sent email registration HTTP exception: tracking_id=%s "
+            "sender_mail=%s recipient_mail=%s",
+            payload.tracking_id,
+            payload.sender_mail,
+            payload.recipient_mail,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "Sent email registration unhandled exception: tracking_id=%s "
+            "sender_mail=%s recipient_mail=%s",
+            payload.tracking_id,
+            payload.sender_mail,
+            payload.recipient_mail,
+        )
+        raise
 
 
 @router.get(
