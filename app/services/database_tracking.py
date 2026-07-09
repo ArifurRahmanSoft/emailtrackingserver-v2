@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from pathlib import PurePath, PureWindowsPath
 
 from sqlalchemy import Engine, create_engine, func, inspect, select, text
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import TrackingAttachment
@@ -102,35 +101,32 @@ class DatabaseTrackingService:
         client_ip: str,
         user_agent: str,
         occurred_at: datetime,
-    ) -> None:
-        """Insert or update one open event using an atomic PostgreSQL upsert."""
+    ) -> bool:
+        """Update an existing tracking row for one recipient open.
+
+        Version 2 send registration creates the row. Open tracking must only
+        update counters and timestamps for that existing ``tracking_id``.
+        """
         session_factory = self._require_session_factory()
         timestamp = self._as_utc(occurred_at)
 
-        statement = postgresql_insert(EmailTracking).values(
-            tracking_id=tracking_id,
-            open_count=open_count,
-            click_count=0,
-            first_open=timestamp,
-            last_open=timestamp,
-            last_ip=client_ip,
-            user_agent=user_agent,
-        )
-        statement = statement.on_conflict_do_update(
-            index_elements=[EmailTracking.tracking_id],
-            set_={
-                "open_count": open_count,
-                "last_open": timestamp,
-                "updated_at": func.now(),
-                "last_ip": client_ip,
-                "user_agent": user_agent,
-            },
-        )
-
         try:
             with session_factory() as session:
-                session.execute(statement)
+                record = session.scalar(
+                    select(EmailTracking)
+                    .where(EmailTracking.tracking_id == tracking_id)
+                    .with_for_update()
+                )
+                if record is None:
+                    return False
+
+                record.open_count = (record.open_count or 0) + 1
+                if record.first_open is None:
+                    record.first_open = timestamp
+                record.last_open = timestamp
+                record.updated_at = timestamp
                 session.commit()
+                return True
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to update PostgreSQL tracking record: {exc}"

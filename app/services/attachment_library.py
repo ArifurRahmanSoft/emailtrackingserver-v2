@@ -1,5 +1,6 @@
 """File and PostgreSQL operations for the attachment library."""
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,14 +9,16 @@ from pathlib import Path
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, create_engine, select, text
+from sqlalchemy import Engine, create_engine, inspect, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import Attachment, AttachmentBase, TrackingAttachment
+from app.models.email_tracking import EmailTracking
 
 MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class AttachmentLibraryError(RuntimeError):
@@ -241,6 +244,11 @@ class AttachmentLibraryService:
                     mapping.first_download = timestamp
                 mapping.last_download = timestamp
                 mapping.updated_at = timestamp
+                self._update_email_tracking_download_summary(
+                    session,
+                    tracking_id,
+                    timestamp,
+                )
                 session.commit()
 
                 return AttachmentDownloadResult(
@@ -257,6 +265,45 @@ class AttachmentLibraryService:
             raise AttachmentLibraryError(
                 f"Unable to track attachment download: {exc}"
             ) from exc
+
+    def _update_email_tracking_download_summary(
+        self,
+        session: Session,
+        tracking_id: str,
+        timestamp: datetime,
+    ) -> None:
+        """Update existing email_tracking download summary fields when present."""
+        if not inspect(session.get_bind()).has_table(EmailTracking.__tablename__):
+            logger.warning(
+                "Email tracking summary update skipped: tracking_id=%s "
+                "event_type=download database_update_status=table_missing",
+                tracking_id,
+            )
+            return
+
+        record = session.scalar(
+            select(EmailTracking)
+            .where(EmailTracking.tracking_id == tracking_id)
+            .with_for_update()
+        )
+        if record is None:
+            logger.warning(
+                "Email tracking summary update skipped: tracking_id=%s "
+                "event_type=download database_update_status=not_found",
+                tracking_id,
+            )
+            return
+
+        record.download_count = (record.download_count or 0) + 1
+        if record.first_download is None:
+            record.first_download = timestamp
+        record.last_download = timestamp
+        record.updated_at = timestamp
+        logger.info(
+            "Email tracking summary update completed: tracking_id=%s "
+            "event_type=download database_update_status=success",
+            tracking_id,
+        )
 
     def register_mappings(
         self,

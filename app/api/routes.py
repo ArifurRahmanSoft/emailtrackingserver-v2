@@ -172,7 +172,7 @@ async def track_email_open(tracking_id: TrackingId, request: Request) -> Respons
             result.status,
         )
         try:
-            await run_in_threadpool(
+            database_updated = await run_in_threadpool(
                 database_service.record_open,
                 tracking_id,
                 result.open_count,
@@ -180,15 +180,23 @@ async def track_email_open(tracking_id: TrackingId, request: Request) -> Respons
                 user_agent,
                 occurred_at,
             )
-            logger.info(
-                "PostgreSQL tracking update completed: TrackingId=%s OpenCount=%d",
-                tracking_id,
-                result.open_count,
-            )
+            if database_updated:
+                logger.info(
+                    "PostgreSQL tracking update completed: TrackingId=%s "
+                    "EventType=open DatabaseUpdateStatus=success",
+                    tracking_id,
+                )
+            else:
+                logger.warning(
+                    "PostgreSQL tracking update skipped: TrackingId=%s "
+                    "EventType=open DatabaseUpdateStatus=not_found",
+                    tracking_id,
+                )
         except Exception as database_exc:
             # Excel remains authoritative when PostgreSQL is unavailable.
             logger.error(
-                "PostgreSQL tracking update failed: TrackingId=%s Error=%s",
+                "PostgreSQL tracking update failed: TrackingId=%s EventType=open "
+                "DatabaseUpdateStatus=failure Error=%s",
                 tracking_id,
                 database_exc,
                 exc_info=True,
