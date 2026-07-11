@@ -15,6 +15,7 @@ from main import app
 
 
 TRACKING_ID = "reply-track-123"
+MESSAGE_ID = "example@emailautomation-v2.local"
 
 
 def build_database_service(database_url: str = "sqlite+pysqlite:///:memory:"):
@@ -30,9 +31,10 @@ def build_database_service(database_url: str = "sqlite+pysqlite:///:memory:"):
     return service, session_factory
 
 
-def test_unknown_tracking_id_returns_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_message_id_returns_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeReplyDatabase:
-        def record_reply(self, tracking_id: str, occurred_at: datetime | None = None):
+        def record_reply(self, message_id: str, occurred_at: datetime | None = None):
+            assert message_id == "unknown-message@example.com"
             return None
 
     monkeypatch.setattr(route_module, "database_service", FakeReplyDatabase())
@@ -41,9 +43,8 @@ def test_unknown_tracking_id_returns_http_404(monkeypatch: pytest.MonkeyPatch) -
     response = client.post(
         "/api/tracking/register-reply",
         json={
-            "tracking_id": "unknown-track",
+            "message_id": "unknown-message@example.com",
             "from_email": "recipient@example.com",
-            "message_id": "<reply-1@example.com>",
         },
     )
 
@@ -56,11 +57,11 @@ def test_first_and_second_reply_update_existing_row() -> None:
     second_reply = first_reply + timedelta(minutes=5)
 
     with session_factory() as session:
-        session.add(EmailTracking(tracking_id=TRACKING_ID))
+        session.add(EmailTracking(tracking_id=TRACKING_ID, message_id=MESSAGE_ID))
         session.commit()
 
-    first = service.record_reply(TRACKING_ID, first_reply)
-    second = service.record_reply(TRACKING_ID, second_reply)
+    first = service.record_reply(MESSAGE_ID, first_reply)
+    second = service.record_reply(MESSAGE_ID, second_reply)
 
     with session_factory() as session:
         record = session.scalar(
@@ -69,6 +70,8 @@ def test_first_and_second_reply_update_existing_row() -> None:
 
     assert first is not None
     assert second is not None
+    assert first.tracking_id == TRACKING_ID
+    assert second.tracking_id == TRACKING_ID
     assert first.reply_count == 1
     assert second.reply_count == 2
     assert first.first_reply.replace(tzinfo=None) == first_reply.replace(tzinfo=None)
@@ -82,13 +85,16 @@ def test_first_and_second_reply_update_existing_row() -> None:
 
 def test_reply_endpoint_returns_updated_counter(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeReplyDatabase:
-        def record_reply(self, tracking_id: str, occurred_at: datetime | None = None):
-            assert tracking_id == TRACKING_ID
+        def record_reply(self, message_id: str, occurred_at: datetime | None = None):
+            assert message_id == MESSAGE_ID
             assert occurred_at is not None
             return ReplyUpdateResult(
+                tracking_id=TRACKING_ID,
                 reply_count=1,
                 first_reply=occurred_at,
                 last_reply=occurred_at,
+                database_primary_key=123,
+                reply_count_before_update=0,
             )
 
     monkeypatch.setattr(route_module, "database_service", FakeReplyDatabase())
@@ -97,16 +103,16 @@ def test_reply_endpoint_returns_updated_counter(monkeypatch: pytest.MonkeyPatch)
     response = client.post(
         "/api/tracking/register-reply",
         json={
-            "tracking_id": TRACKING_ID,
+            "message_id": MESSAGE_ID,
             "reply_time": "2026-07-11T08:00:00Z",
             "from_email": "recipient@example.com",
-            "message_id": "<reply-1@example.com>",
         },
         headers={"User-Agent": "ReplyTrackingTest/1.0"},
     )
 
     assert response.status_code == 200
     assert response.json()["success"] is True
+    assert response.json()["message_id"] == MESSAGE_ID
     assert response.json()["tracking_id"] == TRACKING_ID
     assert response.json()["reply_count"] == 1
 
@@ -116,14 +122,20 @@ def test_concurrent_replies_increment_without_lost_updates(tmp_path) -> None:
     service, session_factory = build_database_service(database_url)
 
     with session_factory() as session:
-        session.add(EmailTracking(tracking_id=TRACKING_ID, reply_count=0))
+        session.add(
+            EmailTracking(
+                tracking_id=TRACKING_ID,
+                message_id=MESSAGE_ID,
+                reply_count=0,
+            )
+        )
         session.commit()
 
     base_time = datetime(2026, 7, 11, 8, 0, tzinfo=timezone.utc)
 
     def register_reply(index: int):
         return service.record_reply(
-            TRACKING_ID,
+            MESSAGE_ID,
             base_time + timedelta(seconds=index),
         )
 

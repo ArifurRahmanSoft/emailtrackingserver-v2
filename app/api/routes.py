@@ -168,69 +168,71 @@ async def register_reply(
             if hasattr(payload, "model_dump")
             else payload.dict()
         )
-        tracking_id = payload.tracking_id.strip()
+        message_id = payload.message_id.strip() if payload.message_id else ""
         client_ip = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
 
         logger.info(
             "register-reply request received before database query: "
-            "message_id=%s request_body=%s",
-            payload.message_id,
+            "message_id=%s client_ip=%s user_agent=%s request_body=%s",
+            message_id,
+            client_ip,
+            user_agent,
             request_body,
         )
 
-        if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+        if not message_id:
             logger.warning(
-                "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
-                "reply_time=%s client_ip=%s user_agent=%s reason=invalid_tracking_id",
-                payload.tracking_id,
+                "Reply rejected: from_email=%s message_id=%s "
+                "reply_time=%s client_ip=%s user_agent=%s reason=missing_message_id",
                 payload.from_email,
-                payload.message_id,
+                message_id,
                 payload.reply_time,
                 client_ip,
                 user_agent,
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid tracking_id.",
+                detail="message_id is required.",
             )
 
         reply_time = payload.reply_time or datetime.now(timezone.utc)
         result = await run_in_threadpool(
             database_service.record_reply,
-            tracking_id,
+            message_id,
             reply_time,
         )
 
         logger.info(
-            "register-reply database query result: row_found=%s tracking_id=%s "
-            "database_primary_key=%s",
+            "register-reply database query result: row_found=%s message_id=%s "
+            "tracking_id=%s database_primary_key=%s",
             result is not None,
-            tracking_id,
+            message_id,
+            result.tracking_id if result is not None else None,
             result.database_primary_key if result is not None else None,
         )
 
         if result is None:
             logger.warning(
-                "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
+                "Reply rejected: from_email=%s message_id=%s "
                 "reply_time=%s client_ip=%s user_agent=%s reason=not_found",
-                tracking_id,
                 payload.from_email,
-                payload.message_id,
+                message_id,
                 reply_time.isoformat(),
                 client_ip,
                 user_agent,
             )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content={"detail": "Tracking ID not found."},
+                content={"detail": "Message ID not found."},
             )
 
         logger.info(
-            "register-reply counter update: tracking_id=%s "
+            "register-reply counter update: message_id=%s tracking_id=%s "
             "database_primary_key=%s reply_count_before=%s reply_count_after=%d "
             "commit_status=success",
-            tracking_id,
+            message_id,
+            result.tracking_id,
             result.database_primary_key,
             result.reply_count_before_update,
             result.reply_count,
@@ -238,9 +240,9 @@ async def register_reply(
         logger.info(
             "Reply tracked: tracking_id=%s from_email=%s message_id=%s "
             "reply_count=%d reply_time=%s client_ip=%s user_agent=%s",
-            tracking_id,
+            result.tracking_id,
             payload.from_email,
-            payload.message_id,
+            message_id,
             result.reply_count,
             reply_time.isoformat(),
             client_ip,
@@ -248,7 +250,8 @@ async def register_reply(
         )
         return ReplyTrackingResponse(
             success=True,
-            tracking_id=tracking_id,
+            message_id=message_id,
+            tracking_id=result.tracking_id,
             reply_count=result.reply_count,
             first_reply=result.first_reply,
             last_reply=result.last_reply,

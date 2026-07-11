@@ -42,6 +42,7 @@ class ClickUpdateResult:
 class ReplyUpdateResult:
     """Result of a successful reply update."""
 
+    tracking_id: str
     reply_count: int
     first_reply: datetime
     last_reply: datetime
@@ -193,16 +194,17 @@ class DatabaseTrackingService:
 
     def record_reply(
         self,
-        tracking_id: str,
+        message_id: str,
         occurred_at: datetime | None = None,
     ) -> ReplyUpdateResult | None:
         """Update an existing tracking row for one recipient reply.
 
         The update is a single atomic statement so concurrent reply events
-        cannot lose increments. No row is created when ``tracking_id`` is absent.
+        cannot lose increments. No row is created when ``message_id`` is absent.
         """
         session_factory = self._require_session_factory()
         timestamp = self._as_utc(occurred_at or datetime.now(timezone.utc))
+        message_id = message_id.strip()
 
         try:
             with session_factory() as session:
@@ -211,23 +213,25 @@ class DatabaseTrackingService:
                         EmailTracking.id,
                         EmailTracking.tracking_id,
                         EmailTracking.reply_count,
-                    ).where(EmailTracking.tracking_id == tracking_id)
+                    ).where(EmailTracking.message_id == message_id)
                 ).one_or_none()
                 logger.info(
-                    "register-reply database row lookup: found=%s tracking_id=%s "
-                    "database_primary_key=%s",
+                    "register-reply database row lookup: found=%s message_id=%s "
+                    "tracking_id=%s database_primary_key=%s",
                     lookup is not None,
-                    tracking_id,
+                    message_id,
+                    lookup.tracking_id if lookup is not None else None,
                     lookup.id if lookup is not None else None,
                 )
                 if lookup is None:
                     return None
 
                 database_primary_key = lookup.id
+                tracking_id = lookup.tracking_id
                 reply_count_before_update = lookup.reply_count or 0
                 result = session.execute(
                     update(EmailTracking)
-                    .where(EmailTracking.tracking_id == tracking_id)
+                    .where(EmailTracking.message_id == message_id)
                     .values(
                         reply_count=func.coalesce(EmailTracking.reply_count, 0) + 1,
                         first_reply=func.coalesce(
@@ -247,7 +251,7 @@ class DatabaseTrackingService:
                         EmailTracking.reply_count,
                         EmailTracking.first_reply,
                         EmailTracking.last_reply,
-                    ).where(EmailTracking.tracking_id == tracking_id)
+                    ).where(EmailTracking.message_id == message_id)
                 ).one_or_none()
                 session.commit()
 
@@ -255,15 +259,17 @@ class DatabaseTrackingService:
                     return None
                 reply_count, first_reply, last_reply = record
                 logger.info(
-                    "register-reply database update committed: tracking_id=%s "
-                    "database_primary_key=%s reply_count_before=%d "
+                    "register-reply database update committed: message_id=%s "
+                    "tracking_id=%s database_primary_key=%s reply_count_before=%d "
                     "reply_count_after=%d commit_status=success",
+                    message_id,
                     tracking_id,
                     database_primary_key,
                     reply_count_before_update,
                     reply_count or 0,
                 )
                 return ReplyUpdateResult(
+                    tracking_id=tracking_id,
                     reply_count=reply_count or 0,
                     first_reply=first_reply,
                     last_reply=last_reply,
