@@ -54,6 +54,7 @@ class SentEmailRegistration:
     mail_subject: str | None = None
     project_name: str | None = None
     excel_file_path: str | None = None
+    message_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +259,7 @@ class DatabaseTrackingService:
         timestamp = self._as_utc(registered_at or datetime.now(timezone.utc))
         excel_file_path = self._clean_optional(registration.excel_file_path)
         excel_file_name = self._derive_excel_file_name(excel_file_path)
+        message_id = self._clean_optional(registration.message_id)
 
         try:
             with session_factory() as session:
@@ -292,6 +294,8 @@ class DatabaseTrackingService:
                 )
                 record.excel_file_path = excel_file_path
                 record.excel_file_name = excel_file_name
+                if message_id is not None and record.message_id is None:
+                    record.message_id = message_id
                 record.last_synchronize_time = None
                 record.updated_at = timestamp
                 session.commit()

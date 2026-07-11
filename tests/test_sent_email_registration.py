@@ -46,6 +46,7 @@ def test_sent_email_registration_populates_new_v2_columns(
             mail_subject="Quarterly Update",
             project_name="Q3 Outreach",
             excel_file_path=r"F:\CODEX\EmailAutomation\data\mail_list.xlsx",
+            message_id="<smtp-message-123@example.com>",
         ),
         registered_at=datetime(2026, 7, 8, 9, 30, tzinfo=timezone.utc),
     )
@@ -64,6 +65,7 @@ def test_sent_email_registration_populates_new_v2_columns(
     assert record.project_name == "Q3 Outreach"
     assert record.excel_file_path == r"F:\CODEX\EmailAutomation\data\mail_list.xlsx"
     assert record.excel_file_name == "mail_list.xlsx"
+    assert record.message_id == "<smtp-message-123@example.com>"
     assert record.last_synchronize_time is None
     assert record.open_count == 0
     assert record.click_count == 0
@@ -126,7 +128,65 @@ def test_missing_v2_metadata_remains_null_for_backward_compatibility(
     assert record.project_name is None
     assert record.excel_file_path is None
     assert record.excel_file_name is None
+    assert record.message_id is None
     assert record.last_synchronize_time is None
+
+
+def test_sent_email_registration_without_message_id_keeps_existing_behavior(
+    database_service: tuple[DatabaseTrackingService, sessionmaker],
+) -> None:
+    service, session_factory = database_service
+
+    service.register_sent_email(
+        SentEmailRegistration(
+            tracking_id=TRACKING_ID,
+            sender_mail="sender@example.com",
+            recipient_mail="recipient@example.com",
+        )
+    )
+
+    with session_factory() as session:
+        record = session.scalar(
+            select(EmailTracking).where(EmailTracking.tracking_id == TRACKING_ID)
+        )
+
+    assert record is not None
+    assert record.message_id is None
+    assert record.sender_mail == "sender@example.com"
+    assert record.recipient_email == "recipient@example.com"
+
+
+def test_sent_email_registration_does_not_overwrite_existing_message_id(
+    database_service: tuple[DatabaseTrackingService, sessionmaker],
+) -> None:
+    service, session_factory = database_service
+    with session_factory() as session:
+        session.add(
+            EmailTracking(
+                tracking_id=TRACKING_ID,
+                message_id="<original@example.com>",
+                open_count=0,
+                click_count=0,
+            )
+        )
+        session.commit()
+
+    service.register_sent_email(
+        SentEmailRegistration(
+            tracking_id=TRACKING_ID,
+            sender_mail="sender@example.com",
+            message_id="<new@example.com>",
+        )
+    )
+
+    with session_factory() as session:
+        record = session.scalar(
+            select(EmailTracking).where(EmailTracking.tracking_id == TRACKING_ID)
+        )
+
+    assert record is not None
+    assert record.message_id == "<original@example.com>"
+    assert record.sender_mail == "sender@example.com"
 
 
 class FakeRegistrationDatabase:
@@ -175,6 +235,7 @@ def test_register_send_endpoint_accepts_v2_request(
             "mail_subject": "Quarterly Update",
             "project_name": "Q3 Outreach",
             "excel_file_path": r"F:\CODEX\EmailAutomation\data\mail_list.xlsx",
+            "message_id": "<smtp-message-123@example.com>",
         },
     )
 
@@ -185,6 +246,7 @@ def test_register_send_endpoint_accepts_v2_request(
         "excel_file_name": "mail_list.xlsx",
     }
     assert database.registrations[0].project_name == "Q3 Outreach"
+    assert database.registrations[0].message_id == "<smtp-message-123@example.com>"
 
 
 def test_register_send_endpoint_logs_request_metadata(
@@ -206,6 +268,7 @@ def test_register_send_endpoint_logs_request_metadata(
             "tracking_id": TRACKING_ID,
             "sender_mail": "sender@example.com",
             "recipient_mail": "recipient@example.com",
+            "message_id": "<smtp-message-123@example.com>",
         },
     )
 
@@ -214,6 +277,7 @@ def test_register_send_endpoint_logs_request_metadata(
     assert any(TRACKING_ID in item for item in logged_messages)
     assert any("sender@example.com" in item for item in logged_messages)
     assert any("recipient@example.com" in item for item in logged_messages)
+    assert any("<smtp-message-123@example.com>" in item for item in logged_messages)
 
 
 def test_register_send_endpoint_rejects_invalid_tracking_id(
@@ -249,10 +313,11 @@ def test_register_send_endpoint_logs_database_traceback(
 
     response = client.post(
         "/api/tracking/register-send",
-        json={"tracking_id": TRACKING_ID},
+        json={"tracking_id": TRACKING_ID, "message_id": "<smtp-message-123@example.com>"},
     )
 
     assert response.status_code == 503
     assert any(
         "Sent email registration failed" in item for item in exception_messages
     )
+    assert any("<smtp-message-123@example.com>" in item for item in exception_messages)

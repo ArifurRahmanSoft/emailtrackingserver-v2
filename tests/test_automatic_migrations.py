@@ -24,6 +24,7 @@ REQUIRED_V2_COLUMNS = {
     "reply_count",
     "first_reply",
     "last_reply",
+    "message_id",
 }
 
 
@@ -101,7 +102,9 @@ def test_missing_v2_columns_are_created_by_migrations(tmp_path: Path) -> None:
     run_pending_migrations(database_url)
 
     engine = create_engine(database_url)
-    columns = {column["name"] for column in inspect(engine).get_columns("email_tracking")}
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("email_tracking")}
+    indexes = {index["name"] for index in inspector.get_indexes("email_tracking")}
     with engine.connect() as connection:
         row = connection.execute(
             text(
@@ -121,6 +124,7 @@ def test_missing_v2_columns_are_created_by_migrations(tmp_path: Path) -> None:
     engine.dispose()
 
     assert REQUIRED_V2_COLUMNS.issubset(columns)
+    assert "ix_email_tracking_message_id" in indexes
     assert row["download_count"] == 0
     assert row["first_download"] is None
     assert row["last_download"] is None
@@ -177,3 +181,4 @@ def test_legacy_tracking_rows_still_work_with_new_nullable_columns() -> None:
     assert record.reply_count == 0
     assert record.first_reply is None
     assert record.last_reply is None
+    assert record.message_id is None

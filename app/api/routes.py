@@ -75,10 +75,11 @@ async def register_sent_email(
     """Register V2 email-send metadata without changing tracking counters."""
     logger.info(
         "Register-send request received: tracking_id=%s sender_mail=%s "
-        "recipient_mail=%s",
+        "recipient_mail=%s message_id=%s",
         payload.tracking_id,
         payload.sender_mail,
         payload.recipient_mail,
+        payload.message_id,
     )
     try:
         tracking_id = payload.tracking_id.strip()
@@ -97,17 +98,19 @@ async def register_sent_email(
                 mail_subject=payload.mail_subject,
                 project_name=payload.project_name,
                 excel_file_path=payload.excel_file_path,
+                message_id=payload.message_id,
             ),
         )
 
         logger.info(
             "Sent email registered: tracking_id=%s sender_mail=%s recipient_mail=%s "
-            "project_name=%s excel_file_name=%s",
+            "project_name=%s excel_file_name=%s message_id=%s status=success",
             tracking_id,
             payload.sender_mail,
             payload.recipient_mail,
             payload.project_name,
             result.excel_file_name,
+            payload.message_id,
         )
         return SentEmailRegistrationResponse(
             success=True,
@@ -116,8 +119,10 @@ async def register_sent_email(
         )
     except DatabaseUnavailableError as exc:
         logger.exception(
-            "Sent email registration failed: tracking_id=%s error=%s",
+            "Sent email registration failed: tracking_id=%s message_id=%s "
+            "status=failure error=%s",
             payload.tracking_id,
+            payload.message_id,
             exc,
         )
         raise HTTPException(
@@ -127,19 +132,21 @@ async def register_sent_email(
     except HTTPException:
         logger.exception(
             "Sent email registration HTTP exception: tracking_id=%s "
-            "sender_mail=%s recipient_mail=%s",
+            "sender_mail=%s recipient_mail=%s message_id=%s status=failure",
             payload.tracking_id,
             payload.sender_mail,
             payload.recipient_mail,
+            payload.message_id,
         )
         raise
     except Exception:
         logger.exception(
             "Sent email registration unhandled exception: tracking_id=%s "
-            "sender_mail=%s recipient_mail=%s",
+            "sender_mail=%s recipient_mail=%s message_id=%s status=failure",
             payload.tracking_id,
             payload.sender_mail,
             payload.recipient_mail,
+            payload.message_id,
         )
         raise
 

@@ -12,6 +12,7 @@ class SentEmailRegistrationRequest(BaseModel):
     mail_subject: str | None = Field(default=None, max_length=998)
     project_name: str | None = Field(default=None, max_length=255)
     excel_file_path: str | None = None
+    message_id: str | None = Field(default=None, max_length=255)
 
 
 class SentEmailRegistrationResponse(BaseModel):
