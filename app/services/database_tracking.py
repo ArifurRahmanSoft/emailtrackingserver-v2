@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from pathlib import PurePath, PureWindowsPath
 
 from sqlalchemy import Engine, create_engine, func, inspect, select, text, update
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.models.attachment import TrackingAttachment
 from app.models.email_tracking import Base, EmailTracking
 from app.services.alembic_migrations import run_pending_migrations
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -42,6 +45,8 @@ class ReplyUpdateResult:
     reply_count: int
     first_reply: datetime
     last_reply: datetime
+    database_primary_key: int | None = None
+    reply_count_before_update: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +206,25 @@ class DatabaseTrackingService:
 
         try:
             with session_factory() as session:
+                lookup = session.execute(
+                    select(
+                        EmailTracking.id,
+                        EmailTracking.tracking_id,
+                        EmailTracking.reply_count,
+                    ).where(EmailTracking.tracking_id == tracking_id)
+                ).one_or_none()
+                logger.info(
+                    "register-reply database row lookup: found=%s tracking_id=%s "
+                    "database_primary_key=%s",
+                    lookup is not None,
+                    tracking_id,
+                    lookup.id if lookup is not None else None,
+                )
+                if lookup is None:
+                    return None
+
+                database_primary_key = lookup.id
+                reply_count_before_update = lookup.reply_count or 0
                 result = session.execute(
                     update(EmailTracking)
                     .where(EmailTracking.tracking_id == tracking_id)
@@ -230,10 +254,21 @@ class DatabaseTrackingService:
                 if record is None:
                     return None
                 reply_count, first_reply, last_reply = record
+                logger.info(
+                    "register-reply database update committed: tracking_id=%s "
+                    "database_primary_key=%s reply_count_before=%d "
+                    "reply_count_after=%d commit_status=success",
+                    tracking_id,
+                    database_primary_key,
+                    reply_count_before_update,
+                    reply_count or 0,
+                )
                 return ReplyUpdateResult(
                     reply_count=reply_count or 0,
                     first_reply=first_reply,
                     last_reply=last_reply,
+                    database_primary_key=database_primary_key,
+                    reply_count_before_update=reply_count_before_update,
                 )
         except Exception as exc:
             raise DatabaseUnavailableError(

@@ -162,85 +162,100 @@ async def register_reply(
     request: Request,
 ) -> ReplyTrackingResponse:
     """Increment reply tracking counters for an existing tracking row."""
-    tracking_id = payload.tracking_id.strip()
-    client_ip = request.client.host if request.client else "unknown"
-    user_agent = request.headers.get("user-agent", "unknown")
-
-    if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
-        logger.warning(
-            "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
-            "reply_time=%s client_ip=%s user_agent=%s reason=invalid_tracking_id",
-            payload.tracking_id,
-            payload.from_email,
-            payload.message_id,
-            payload.reply_time,
-            client_ip,
-            user_agent,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid tracking_id.",
-        )
-
-    reply_time = payload.reply_time or datetime.now(timezone.utc)
     try:
+        request_body = (
+            payload.model_dump(mode="json")
+            if hasattr(payload, "model_dump")
+            else payload.dict()
+        )
+        tracking_id = payload.tracking_id.strip()
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+
+        logger.info(
+            "register-reply request received before database query: "
+            "message_id=%s request_body=%s",
+            payload.message_id,
+            request_body,
+        )
+
+        if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+            logger.warning(
+                "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
+                "reply_time=%s client_ip=%s user_agent=%s reason=invalid_tracking_id",
+                payload.tracking_id,
+                payload.from_email,
+                payload.message_id,
+                payload.reply_time,
+                client_ip,
+                user_agent,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid tracking_id.",
+            )
+
+        reply_time = payload.reply_time or datetime.now(timezone.utc)
         result = await run_in_threadpool(
             database_service.record_reply,
             tracking_id,
             reply_time,
         )
-    except Exception as exc:
-        logger.error(
-            "Reply tracking failed: tracking_id=%s from_email=%s message_id=%s "
-            "reply_time=%s client_ip=%s user_agent=%s error=%s",
+
+        logger.info(
+            "register-reply database query result: row_found=%s tracking_id=%s "
+            "database_primary_key=%s",
+            result is not None,
+            tracking_id,
+            result.database_primary_key if result is not None else None,
+        )
+
+        if result is None:
+            logger.warning(
+                "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
+                "reply_time=%s client_ip=%s user_agent=%s reason=not_found",
+                tracking_id,
+                payload.from_email,
+                payload.message_id,
+                reply_time.isoformat(),
+                client_ip,
+                user_agent,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Tracking ID not found."},
+            )
+
+        logger.info(
+            "register-reply counter update: tracking_id=%s "
+            "database_primary_key=%s reply_count_before=%s reply_count_after=%d "
+            "commit_status=success",
+            tracking_id,
+            result.database_primary_key,
+            result.reply_count_before_update,
+            result.reply_count,
+        )
+        logger.info(
+            "Reply tracked: tracking_id=%s from_email=%s message_id=%s "
+            "reply_count=%d reply_time=%s client_ip=%s user_agent=%s",
             tracking_id,
             payload.from_email,
             payload.message_id,
-            reply_time.isoformat(),
-            client_ip,
-            user_agent,
-            exc,
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Reply tracking is temporarily unavailable.",
-        ) from exc
-
-    if result is None:
-        logger.warning(
-            "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
-            "reply_time=%s client_ip=%s user_agent=%s reason=not_found",
-            tracking_id,
-            payload.from_email,
-            payload.message_id,
+            result.reply_count,
             reply_time.isoformat(),
             client_ip,
             user_agent,
         )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Tracking ID not found.",
+        return ReplyTrackingResponse(
+            success=True,
+            tracking_id=tracking_id,
+            reply_count=result.reply_count,
+            first_reply=result.first_reply,
+            last_reply=result.last_reply,
         )
-
-    logger.info(
-        "Reply tracked: tracking_id=%s from_email=%s message_id=%s "
-        "reply_count=%d reply_time=%s client_ip=%s user_agent=%s",
-        tracking_id,
-        payload.from_email,
-        payload.message_id,
-        result.reply_count,
-        reply_time.isoformat(),
-        client_ip,
-        user_agent,
-    )
-    return ReplyTrackingResponse(
-        success=True,
-        tracking_id=tracking_id,
-        reply_count=result.reply_count,
-        first_reply=result.first_reply,
-        last_reply=result.last_reply,
-    )
+    except Exception:
+        logger.exception("register-reply failed")
+        raise
 
 
 @router.get(
