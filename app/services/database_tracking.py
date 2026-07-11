@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import PurePath, PureWindowsPath
 
-from sqlalchemy import Engine, create_engine, func, inspect, select, text
+from sqlalchemy import Engine, create_engine, func, inspect, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import TrackingAttachment
@@ -33,6 +33,15 @@ class ClickUpdateResult:
     click_count: int
     first_click: datetime
     last_click: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyUpdateResult:
+    """Result of a successful reply update."""
+
+    reply_count: int
+    first_reply: datetime
+    last_reply: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +185,60 @@ class DatabaseTrackingService:
                 f"Unable to update PostgreSQL click record: {exc}"
             ) from exc
 
+    def record_reply(
+        self,
+        tracking_id: str,
+        occurred_at: datetime | None = None,
+    ) -> ReplyUpdateResult | None:
+        """Update an existing tracking row for one recipient reply.
+
+        The update is a single atomic statement so concurrent reply events
+        cannot lose increments. No row is created when ``tracking_id`` is absent.
+        """
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(occurred_at or datetime.now(timezone.utc))
+
+        try:
+            with session_factory() as session:
+                result = session.execute(
+                    update(EmailTracking)
+                    .where(EmailTracking.tracking_id == tracking_id)
+                    .values(
+                        reply_count=func.coalesce(EmailTracking.reply_count, 0) + 1,
+                        first_reply=func.coalesce(
+                            EmailTracking.first_reply,
+                            timestamp,
+                        ),
+                        last_reply=timestamp,
+                        updated_at=timestamp,
+                    )
+                )
+                if result.rowcount == 0:
+                    session.rollback()
+                    return None
+
+                record = session.execute(
+                    select(
+                        EmailTracking.reply_count,
+                        EmailTracking.first_reply,
+                        EmailTracking.last_reply,
+                    ).where(EmailTracking.tracking_id == tracking_id)
+                ).one_or_none()
+                session.commit()
+
+                if record is None:
+                    return None
+                reply_count, first_reply, last_reply = record
+                return ReplyUpdateResult(
+                    reply_count=reply_count or 0,
+                    first_reply=first_reply,
+                    last_reply=last_reply,
+                )
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to update PostgreSQL reply record: {exc}"
+            ) from exc
+
     def register_sent_email(
         self,
         registration: SentEmailRegistration,
@@ -287,18 +350,23 @@ class DatabaseTrackingService:
         """Return only desktop synchronization fields ordered by update time."""
         session_factory = self._require_session_factory()
         statement = select(
+            EmailTracking.excel_file_path,
             EmailTracking.tracking_id,
+            EmailTracking.last_synchronize_time,
             EmailTracking.open_count,
             EmailTracking.click_count,
             func.coalesce(
                 func.sum(TrackingAttachment.download_count), 0
             ).label("download_count"),
+            EmailTracking.reply_count,
             EmailTracking.first_open,
             EmailTracking.last_open,
             EmailTracking.first_click,
             EmailTracking.last_click,
             func.min(TrackingAttachment.first_download).label("first_download"),
             func.max(TrackingAttachment.last_download).label("last_download"),
+            EmailTracking.first_reply,
+            EmailTracking.last_reply,
             EmailTracking.updated_at,
         ).outerjoin(
             TrackingAttachment,
@@ -309,13 +377,18 @@ class DatabaseTrackingService:
                 EmailTracking.updated_at > self._as_utc(updated_after)
             )
         statement = statement.group_by(
+            EmailTracking.excel_file_path,
             EmailTracking.tracking_id,
+            EmailTracking.last_synchronize_time,
             EmailTracking.open_count,
             EmailTracking.click_count,
+            EmailTracking.reply_count,
             EmailTracking.first_open,
             EmailTracking.last_open,
             EmailTracking.first_click,
             EmailTracking.last_click,
+            EmailTracking.first_reply,
+            EmailTracking.last_reply,
             EmailTracking.updated_at,
         ).order_by(EmailTracking.updated_at.asc())
 
@@ -328,6 +401,35 @@ class DatabaseTrackingService:
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to fetch PostgreSQL synchronization records: {exc}"
+            ) from exc
+
+    def mark_synchronized(
+        self,
+        tracking_id: str,
+        last_synchronize_time: datetime,
+    ) -> bool:
+        """Update only last_synchronize_time for one tracking row."""
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(last_synchronize_time)
+
+        try:
+            with session_factory() as session:
+                result = session.execute(
+                    text(
+                        "UPDATE email_tracking "
+                        "SET last_synchronize_time = :last_synchronize_time "
+                        "WHERE tracking_id = :tracking_id"
+                    ),
+                    {
+                        "last_synchronize_time": timestamp,
+                        "tracking_id": tracking_id,
+                    },
+                )
+                session.commit()
+                return bool(result.rowcount)
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to mark tracking row synchronized: {exc}"
             ) from exc
 
     def dispose(self) -> None:

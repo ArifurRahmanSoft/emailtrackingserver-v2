@@ -177,3 +177,37 @@ def test_download_tracking_updates_existing_email_tracking_row(
     assert record.recipient_email == "recipient@example.com"
     assert record.mail_subject == "Subject"
     assert record.project_name == "Project"
+
+
+def test_mark_synchronized_updates_only_last_synchronize_time() -> None:
+    service, session_factory = _database_service()
+    original_updated_at = datetime(2026, 7, 9, 10, 0, tzinfo=timezone.utc)
+    synchronized_at = datetime(2026, 7, 9, 10, 30, tzinfo=timezone.utc)
+
+    with session_factory() as session:
+        session.add(
+            EmailTracking(
+                tracking_id=TRACKING_ID,
+                open_count=4,
+                click_count=3,
+                download_count=2,
+                updated_at=original_updated_at,
+            )
+        )
+        session.commit()
+
+    assert service.mark_synchronized(TRACKING_ID, synchronized_at)
+
+    with session_factory() as session:
+        record = session.scalar(
+            select(EmailTracking).where(EmailTracking.tracking_id == TRACKING_ID)
+        )
+
+    assert record is not None
+    assert record.last_synchronize_time.replace(tzinfo=None) == synchronized_at.replace(
+        tzinfo=None
+    )
+    assert record.open_count == 4
+    assert record.click_count == 3
+    assert record.download_count == 2
+    assert record.updated_at == original_updated_at.replace(tzinfo=None)

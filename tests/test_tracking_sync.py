@@ -22,6 +22,14 @@ class FakeSyncDatabaseService:
         self.received_cursors.append(updated_after)
         return self.records
 
+    def mark_synchronized(
+        self,
+        tracking_id: str,
+        last_synchronize_time: datetime,
+    ) -> bool:
+        self.marked = (tracking_id, last_synchronize_time)
+        return tracking_id == "sync-test-123"
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -31,16 +39,21 @@ def client() -> TestClient:
 @pytest.fixture
 def sync_record() -> dict[str, object]:
     return {
+        "excel_file_path": r"F:\CODEX\EmailAutomation\data\mail_list.xlsx",
         "tracking_id": "sync-test-123",
+        "last_synchronize_time": None,
         "open_count": 3,
         "click_count": 1,
         "download_count": 4,
+        "reply_count": 0,
         "first_open": datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
         "last_open": datetime(2026, 7, 1, 9, 0, tzinfo=timezone.utc),
         "first_click": datetime(2026, 7, 1, 9, 5, tzinfo=timezone.utc),
         "last_click": datetime(2026, 7, 1, 9, 10, tzinfo=timezone.utc),
         "first_download": datetime(2026, 7, 1, 9, 12, tzinfo=timezone.utc),
         "last_download": datetime(2026, 7, 1, 9, 20, tzinfo=timezone.utc),
+        "first_reply": None,
+        "last_reply": None,
         "updated_at": datetime(2026, 7, 1, 9, 10, tzinfo=timezone.utc),
         "last_ip": "not-returned",
     }
@@ -60,16 +73,21 @@ def test_sync_without_cursor_returns_all_required_fields(
     assert database.received_cursors == [None]
     assert len(response.json()) == 1
     assert set(response.json()[0]) == {
+        "excel_file_path",
         "tracking_id",
+        "last_synchronize_time",
         "open_count",
         "click_count",
         "download_count",
+        "reply_count",
         "first_open",
         "last_open",
         "first_click",
         "last_click",
         "first_download",
         "last_download",
+        "first_reply",
+        "last_reply",
         "updated_at",
     }
 
@@ -112,3 +130,26 @@ def test_invalid_sync_cursor_returns_400(
 
     assert response.status_code == 400
     assert database.received_cursors == []
+
+
+def test_mark_synchronized_updates_only_marker(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = FakeSyncDatabaseService([])
+    monkeypatch.setattr(route_module, "database_service", database)
+
+    response = client.post(
+        "/api/tracking/mark-synchronized",
+        json={
+            "tracking_id": "sync-test-123",
+            "last_synchronize_time": "2026-07-01T09:45:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert database.marked == (
+        "sync-test-123",
+        datetime(2026, 7, 1, 9, 45, tzinfo=timezone.utc),
+    )

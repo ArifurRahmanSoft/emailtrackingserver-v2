@@ -18,7 +18,12 @@ from app.models.sent_email_registration import (
     SentEmailRegistrationRequest,
     SentEmailRegistrationResponse,
 )
-from app.models.tracking_sync import TrackingSyncRecord
+from app.models.reply_tracking import ReplyTrackingRequest, ReplyTrackingResponse
+from app.models.tracking_sync import (
+    MarkSynchronizedRequest,
+    MarkSynchronizedResponse,
+    TrackingSyncRecord,
+)
 from app.services.database_tracking import (
     DatabaseTrackingService,
     DatabaseUnavailableError,
@@ -137,6 +142,98 @@ async def register_sent_email(
             payload.recipient_mail,
         )
         raise
+
+
+@router.post(
+    "/api/tracking/register-reply",
+    tags=["Tracking"],
+    summary="Register a recipient reply",
+    response_model=ReplyTrackingResponse,
+)
+async def register_reply(
+    payload: ReplyTrackingRequest,
+    request: Request,
+) -> ReplyTrackingResponse:
+    """Increment reply tracking counters for an existing tracking row."""
+    tracking_id = payload.tracking_id.strip()
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+
+    if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+        logger.warning(
+            "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
+            "reply_time=%s client_ip=%s user_agent=%s reason=invalid_tracking_id",
+            payload.tracking_id,
+            payload.from_email,
+            payload.message_id,
+            payload.reply_time,
+            client_ip,
+            user_agent,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid tracking_id.",
+        )
+
+    reply_time = payload.reply_time or datetime.now(timezone.utc)
+    try:
+        result = await run_in_threadpool(
+            database_service.record_reply,
+            tracking_id,
+            reply_time,
+        )
+    except Exception as exc:
+        logger.error(
+            "Reply tracking failed: tracking_id=%s from_email=%s message_id=%s "
+            "reply_time=%s client_ip=%s user_agent=%s error=%s",
+            tracking_id,
+            payload.from_email,
+            payload.message_id,
+            reply_time.isoformat(),
+            client_ip,
+            user_agent,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Reply tracking is temporarily unavailable.",
+        ) from exc
+
+    if result is None:
+        logger.warning(
+            "Reply rejected: tracking_id=%s from_email=%s message_id=%s "
+            "reply_time=%s client_ip=%s user_agent=%s reason=not_found",
+            tracking_id,
+            payload.from_email,
+            payload.message_id,
+            reply_time.isoformat(),
+            client_ip,
+            user_agent,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tracking ID not found.",
+        )
+
+    logger.info(
+        "Reply tracked: tracking_id=%s from_email=%s message_id=%s "
+        "reply_count=%d reply_time=%s client_ip=%s user_agent=%s",
+        tracking_id,
+        payload.from_email,
+        payload.message_id,
+        result.reply_count,
+        reply_time.isoformat(),
+        client_ip,
+        user_agent,
+    )
+    return ReplyTrackingResponse(
+        success=True,
+        tracking_id=tracking_id,
+        reply_count=result.reply_count,
+        first_reply=result.first_reply,
+        last_reply=result.last_reply,
+    )
 
 
 @router.get(
@@ -531,3 +628,56 @@ async def synchronize_tracking_records(
         execution_ms,
     )
     return [TrackingSyncRecord.model_validate(record) for record in records]
+
+
+@router.post(
+    "/api/tracking/mark-synchronized",
+    tags=["Synchronization"],
+    summary="Mark one tracking row synchronized to Excel",
+    response_model=MarkSynchronizedResponse,
+)
+async def mark_tracking_synchronized(
+    payload: MarkSynchronizedRequest,
+) -> MarkSynchronizedResponse:
+    """Persist only last_synchronize_time after Excel update succeeds."""
+    tracking_id = payload.tracking_id.strip()
+    if not CLICK_TRACKING_ID_PATTERN.fullmatch(tracking_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid tracking_id.",
+        )
+
+    try:
+        updated = await run_in_threadpool(
+            database_service.mark_synchronized,
+            tracking_id,
+            payload.last_synchronize_time,
+        )
+    except Exception as exc:
+        logger.error(
+            "Mark synchronized failed: tracking_id=%s Error=%s",
+            tracking_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Tracking synchronization marker is temporarily unavailable.",
+        ) from exc
+
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tracking ID not found.",
+        )
+
+    logger.info(
+        "Tracking marked synchronized: tracking_id=%s last_synchronize_time=%s",
+        tracking_id,
+        payload.last_synchronize_time.isoformat(),
+    )
+    return MarkSynchronizedResponse(
+        success=True,
+        tracking_id=tracking_id,
+        last_synchronize_time=payload.last_synchronize_time,
+    )
