@@ -48,6 +48,13 @@ class EmailTracking(Base):
     last_reply: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    is_bounce: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    bounce_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    bounce_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     click_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     first_open: Mapped[datetime | None] = mapped_column(

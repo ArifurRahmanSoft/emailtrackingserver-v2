@@ -51,6 +51,19 @@ class ReplyUpdateResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BounceUpdateResult:
+    """Result of a successful bounce update."""
+
+    message_id: str
+    tracking_id: str
+    is_bounce: int
+    bounce_time: datetime
+    bounce_reason: str | None
+    database_primary_key: int | None = None
+    is_bounce_before_update: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SentEmailRegistration:
     """Metadata captured by Version 2 immediately after a successful send."""
 
@@ -279,6 +292,94 @@ class DatabaseTrackingService:
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to update PostgreSQL reply record: {exc}"
+            ) from exc
+
+    def record_bounce(
+        self,
+        message_id: str,
+        bounce_reason: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> BounceUpdateResult | None:
+        """Mark an existing tracking row as bounced using SMTP Message-ID."""
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(occurred_at or datetime.now(timezone.utc))
+        message_id = message_id.strip()
+
+        try:
+            with session_factory() as session:
+                lookup = session.execute(
+                    select(
+                        EmailTracking.id,
+                        EmailTracking.tracking_id,
+                        EmailTracking.is_bounce,
+                    ).where(EmailTracking.message_id == message_id)
+                ).one_or_none()
+                logger.info(
+                    "register-bounce database row lookup: found=%s message_id=%s "
+                    "tracking_id=%s database_primary_key=%s",
+                    lookup is not None,
+                    message_id,
+                    lookup.tracking_id if lookup is not None else None,
+                    lookup.id if lookup is not None else None,
+                )
+                if lookup is None:
+                    return None
+
+                database_primary_key = lookup.id
+                tracking_id = lookup.tracking_id
+                is_bounce_before_update = lookup.is_bounce or 0
+                result = session.execute(
+                    update(EmailTracking)
+                    .where(EmailTracking.message_id == message_id)
+                    .values(
+                        is_bounce=1,
+                        bounce_time=func.coalesce(
+                            EmailTracking.bounce_time,
+                            timestamp,
+                        ),
+                        bounce_reason=bounce_reason,
+                        updated_at=timestamp,
+                    )
+                )
+                if result.rowcount == 0:
+                    session.rollback()
+                    return None
+
+                record = session.execute(
+                    select(
+                        EmailTracking.is_bounce,
+                        EmailTracking.bounce_time,
+                        EmailTracking.bounce_reason,
+                    ).where(EmailTracking.message_id == message_id)
+                ).one_or_none()
+                session.commit()
+
+                if record is None:
+                    return None
+                is_bounce, bounce_time, stored_reason = record
+                logger.info(
+                    "register-bounce database update committed: message_id=%s "
+                    "tracking_id=%s database_primary_key=%s is_bounce_before=%d "
+                    "is_bounce_after=%d bounce_reason=%s commit_status=success",
+                    message_id,
+                    tracking_id,
+                    database_primary_key,
+                    is_bounce_before_update,
+                    is_bounce or 0,
+                    stored_reason,
+                )
+                return BounceUpdateResult(
+                    message_id=message_id,
+                    tracking_id=tracking_id,
+                    is_bounce=is_bounce or 0,
+                    bounce_time=bounce_time,
+                    bounce_reason=stored_reason,
+                    database_primary_key=database_primary_key,
+                    is_bounce_before_update=is_bounce_before_update,
+                )
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to update PostgreSQL bounce record: {exc}"
             ) from exc
 
     def register_sent_email(

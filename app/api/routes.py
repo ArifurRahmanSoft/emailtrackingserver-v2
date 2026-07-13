@@ -18,6 +18,7 @@ from app.models.sent_email_registration import (
     SentEmailRegistrationRequest,
     SentEmailRegistrationResponse,
 )
+from app.models.bounce_tracking import BounceTrackingRequest, BounceTrackingResponse
 from app.models.reply_tracking import ReplyTrackingRequest, ReplyTrackingResponse
 from app.models.tracking_sync import (
     MarkSynchronizedRequest,
@@ -258,6 +259,97 @@ async def register_reply(
         )
     except Exception:
         logger.exception("register-reply failed")
+        raise
+
+
+@router.post(
+    "/api/tracking/register-bounce",
+    tags=["Tracking"],
+    summary="Register a bounced sent email",
+    response_model=BounceTrackingResponse,
+)
+async def register_bounce(
+    payload: BounceTrackingRequest,
+    request: Request,
+) -> BounceTrackingResponse:
+    """Mark an existing sent-email tracking row as bounced by Message-ID."""
+    try:
+        request_body = (
+            payload.model_dump(mode="json")
+            if hasattr(payload, "model_dump")
+            else payload.dict()
+        )
+        message_id = payload.message_id.strip() if payload.message_id else ""
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+
+        logger.info(
+            "register-bounce request received before database query: "
+            "message_id=%s client_ip=%s user_agent=%s request_body=%s",
+            message_id,
+            client_ip,
+            user_agent,
+            request_body,
+        )
+
+        if not message_id:
+            logger.warning(
+                "Bounce rejected: message_id=%s bounce_reason=%s "
+                "client_ip=%s user_agent=%s reason=missing_message_id",
+                message_id,
+                payload.bounce_reason,
+                client_ip,
+                user_agent,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="message_id is required.",
+            )
+
+        result = await run_in_threadpool(
+            database_service.record_bounce,
+            message_id,
+            payload.bounce_reason,
+            datetime.now(timezone.utc),
+        )
+
+        if result is None:
+            logger.warning(
+                "Bounce rejected: message_id=%s bounce_reason=%s "
+                "client_ip=%s user_agent=%s reason=not_found",
+                message_id,
+                payload.bounce_reason,
+                client_ip,
+                user_agent,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Message ID not found."},
+            )
+
+        logger.info(
+            "Bounce tracked: message_id=%s tracking_id=%s database_primary_key=%s "
+            "is_bounce_before=%s is_bounce_after=%d bounce_reason=%s "
+            "commit_status=success client_ip=%s user_agent=%s",
+            message_id,
+            result.tracking_id,
+            result.database_primary_key,
+            result.is_bounce_before_update,
+            result.is_bounce,
+            result.bounce_reason,
+            client_ip,
+            user_agent,
+        )
+        return BounceTrackingResponse(
+            success=True,
+            message_id=result.message_id,
+            tracking_id=result.tracking_id,
+            is_bounce=result.is_bounce,
+            bounce_time=result.bounce_time,
+            bounce_reason=result.bounce_reason,
+        )
+    except Exception:
+        logger.exception("register-bounce failed")
         raise
 
 

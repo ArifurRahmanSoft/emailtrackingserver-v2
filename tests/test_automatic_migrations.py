@@ -1,6 +1,7 @@
 """Tests for automatic Version 2 Alembic migration support."""
 
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -25,6 +26,9 @@ REQUIRED_V2_COLUMNS = {
     "first_reply",
     "last_reply",
     "message_id",
+    "is_bounce",
+    "bounce_time",
+    "bounce_reason",
 }
 
 
@@ -72,6 +76,12 @@ def _create_legacy_email_tracking_table(database_path: Path) -> str:
     return database_url
 
 
+def _isolated_database_path(name: str) -> Path:
+    temp_dir = Path(__file__).parent / "_tmp_databases"
+    temp_dir.mkdir(exist_ok=True)
+    return temp_dir / f"{name}-{uuid4().hex}.db"
+
+
 def test_database_initialize_executes_pending_migrations(monkeypatch) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -96,8 +106,10 @@ def test_database_initialize_executes_pending_migrations(monkeypatch) -> None:
     assert calls == ["sqlite+pysqlite:///:memory:"]
 
 
-def test_missing_v2_columns_are_created_by_migrations(tmp_path: Path) -> None:
-    database_url = _create_legacy_email_tracking_table(tmp_path / "legacy.db")
+def test_missing_v2_columns_are_created_by_migrations() -> None:
+    database_url = _create_legacy_email_tracking_table(
+        _isolated_database_path("legacy")
+    )
 
     run_pending_migrations(database_url)
 
@@ -115,7 +127,10 @@ def test_missing_v2_columns_are_created_by_migrations(tmp_path: Path) -> None:
                     last_download,
                     reply_count,
                     first_reply,
-                    last_reply
+                    last_reply,
+                    is_bounce,
+                    bounce_time,
+                    bounce_reason
                 FROM email_tracking
                 WHERE tracking_id = 'legacy-v1-compatible'
                 """
@@ -131,10 +146,15 @@ def test_missing_v2_columns_are_created_by_migrations(tmp_path: Path) -> None:
     assert row["reply_count"] == 0
     assert row["first_reply"] is None
     assert row["last_reply"] is None
+    assert row["is_bounce"] == 0
+    assert row["bounce_time"] is None
+    assert row["bounce_reason"] is None
 
 
-def test_migrations_are_idempotent_for_existing_databases(tmp_path: Path) -> None:
-    database_url = _create_legacy_email_tracking_table(tmp_path / "existing.db")
+def test_migrations_are_idempotent_for_existing_databases() -> None:
+    database_url = _create_legacy_email_tracking_table(
+        _isolated_database_path("existing")
+    )
 
     run_pending_migrations(database_url)
     run_pending_migrations(database_url)
@@ -182,3 +202,6 @@ def test_legacy_tracking_rows_still_work_with_new_nullable_columns() -> None:
     assert record.first_reply is None
     assert record.last_reply is None
     assert record.message_id is None
+    assert record.is_bounce == 0
+    assert record.bounce_time is None
+    assert record.bounce_reason is None
