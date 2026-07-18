@@ -23,6 +23,9 @@ class TrackingSyncRecord(BaseModel):
     last_download: datetime | None
     first_reply: datetime | None
     last_reply: datetime | None
+    is_bounce: str
+    bounce_time: datetime | None
+    bounce_reason: str | None
     updated_at: datetime
 
 

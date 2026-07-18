@@ -37,6 +37,7 @@ def aggregation_data() -> tuple[
         "multi_first_late": base_time + timedelta(minutes=7),
         "multi_last_early": base_time + timedelta(minutes=20),
         "multi_last_late": base_time + timedelta(minutes=40),
+        "bounce_time": base_time + timedelta(hours=3),
     }
 
     with session_factory() as session:
@@ -52,6 +53,9 @@ def aggregation_data() -> tuple[
                     tracking_id="multiple-attachments",
                     open_count=4,
                     click_count=2,
+                    is_bounce=1,
+                    bounce_time=times["bounce_time"],
+                    bounce_reason="550 5.1.1 User unknown",
                     updated_at=times["multi_updated"],
                 ),
                 EmailTracking(
@@ -132,6 +136,20 @@ def test_no_attachment_rows_return_zero_and_nulls(
     assert record["download_count"] == 0
     assert record["first_download"] is None
     assert record["last_download"] is None
+    assert record["is_bounce"] == "No"
+    assert record["bounce_time"] is None
+    assert record["bounce_reason"] is None
+
+
+def test_bounce_fields_are_included_in_sync_payload(
+    aggregation_data: tuple[DatabaseTrackingService, dict[str, datetime]],
+) -> None:
+    service, times = aggregation_data
+    record = records_by_id(service)["multiple-attachments"]
+
+    assert record["is_bounce"] == "Yes"
+    assert record["bounce_time"] == times["bounce_time"].replace(tzinfo=None)
+    assert record["bounce_reason"] == "550 5.1.1 User unknown"
 
 
 def test_first_download_uses_earliest_timestamp(

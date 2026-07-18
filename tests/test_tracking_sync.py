@@ -54,6 +54,9 @@ def sync_record() -> dict[str, object]:
         "last_download": datetime(2026, 7, 1, 9, 20, tzinfo=timezone.utc),
         "first_reply": None,
         "last_reply": None,
+        "is_bounce": "Yes",
+        "bounce_time": datetime(2026, 7, 15, 9, 20, 11, tzinfo=timezone.utc),
+        "bounce_reason": "550 5.1.1 User unknown",
         "updated_at": datetime(2026, 7, 1, 9, 10, tzinfo=timezone.utc),
         "last_ip": "not-returned",
     }
@@ -88,8 +91,13 @@ def test_sync_without_cursor_returns_all_required_fields(
         "last_download",
         "first_reply",
         "last_reply",
+        "is_bounce",
+        "bounce_time",
+        "bounce_reason",
         "updated_at",
     }
+    assert response.json()[0]["is_bounce"] == "Yes"
+    assert response.json()[0]["bounce_reason"] == "550 5.1.1 User unknown"
 
 
 def test_sync_cursor_is_parsed_and_normalized_to_utc(

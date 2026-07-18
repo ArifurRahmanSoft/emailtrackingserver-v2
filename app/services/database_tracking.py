@@ -513,6 +513,9 @@ class DatabaseTrackingService:
             func.max(TrackingAttachment.last_download).label("last_download"),
             EmailTracking.first_reply,
             EmailTracking.last_reply,
+            EmailTracking.is_bounce,
+            EmailTracking.bounce_time,
+            EmailTracking.bounce_reason,
             EmailTracking.updated_at,
         ).outerjoin(
             TrackingAttachment,
@@ -535,6 +538,9 @@ class DatabaseTrackingService:
             EmailTracking.last_click,
             EmailTracking.first_reply,
             EmailTracking.last_reply,
+            EmailTracking.is_bounce,
+            EmailTracking.bounce_time,
+            EmailTracking.bounce_reason,
             EmailTracking.updated_at,
         ).order_by(EmailTracking.updated_at.asc())
 
@@ -543,7 +549,13 @@ class DatabaseTrackingService:
                 rows = session.execute(
                     statement.execution_options(stream_results=True, yield_per=1000)
                 ).mappings()
-                return [dict(row) for row in rows]
+                return [
+                    {
+                        **dict(row),
+                        "is_bounce": "Yes" if row["is_bounce"] == 1 else "No",
+                    }
+                    for row in rows
+                ]
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to fetch PostgreSQL synchronization records: {exc}"
