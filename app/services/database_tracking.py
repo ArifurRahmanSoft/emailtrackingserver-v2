@@ -579,6 +579,18 @@ class DatabaseTrackingService:
                 "total_download"
             ),
             func.coalesce(func.sum(EmailTracking.reply_count), 0).label("total_reply"),
+            func.count(
+                case((EmailTracking.open_count > 0, 1))
+            ).label("total_open_by_mail"),
+            func.count(
+                case((EmailTracking.click_count > 0, 1))
+            ).label("total_click_by_mail"),
+            func.count(
+                case((EmailTracking.download_count > 0, 1))
+            ).label("total_download_by_mail"),
+            func.count(
+                case((EmailTracking.reply_count > 0, 1))
+            ).label("total_reply_by_mail"),
             func.coalesce(
                 func.sum(case((EmailTracking.is_bounce == 1, 1), else_=0)),
                 0,
@@ -606,6 +618,12 @@ class DatabaseTrackingService:
                     "total_click": int(row["total_click"] or 0),
                     "total_download": int(row["total_download"] or 0),
                     "total_reply": int(row["total_reply"] or 0),
+                    "total_open_by_mail": int(row["total_open_by_mail"] or 0),
+                    "total_click_by_mail": int(row["total_click_by_mail"] or 0),
+                    "total_download_by_mail": int(
+                        row["total_download_by_mail"] or 0
+                    ),
+                    "total_reply_by_mail": int(row["total_reply_by_mail"] or 0),
                     "total_bounce": int(row["total_bounce"] or 0),
                     "weekly_sent": int(row["weekly_sent"] or 0),
                     "monthly_sent": int(row["monthly_sent"] or 0),

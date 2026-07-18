@@ -22,6 +22,10 @@ class DashboardStatisticsResponse(BaseModel):
     total_download: int
     total_reply: int
     total_bounce: int
+    total_open_by_mail: int
+    total_click_by_mail: int
+    total_download_by_mail: int
+    total_reply_by_mail: int
     weekly_sent: int
     monthly_sent: int
     success_rate: float

@@ -38,6 +38,10 @@ def test_empty_database_returns_zero_statistics() -> None:
     assert result.total_download == 0
     assert result.total_reply == 0
     assert result.total_bounce == 0
+    assert result.total_open_by_mail == 0
+    assert result.total_click_by_mail == 0
+    assert result.total_download_by_mail == 0
+    assert result.total_reply_by_mail == 0
     assert result.weekly_sent == 0
     assert result.monthly_sent == 0
     assert result.success_rate == 0.0
@@ -91,6 +95,10 @@ def test_existing_tracking_data_returns_aggregate_statistics() -> None:
     assert result.total_download == 4
     assert result.total_reply == 1
     assert result.total_bounce == 2
+    assert result.total_open_by_mail == 2
+    assert result.total_click_by_mail == 2
+    assert result.total_download_by_mail == 2
+    assert result.total_reply_by_mail == 1
     assert result.weekly_sent == 1
     assert result.monthly_sent == 2
     assert result.success_rate == 33.33
@@ -112,6 +120,10 @@ def test_dashboard_statistics_endpoint_returns_response(
                 total_download=4,
                 total_reply=1,
                 total_bounce=2,
+                total_open_by_mail=2,
+                total_click_by_mail=2,
+                total_download_by_mail=2,
+                total_reply_by_mail=1,
                 weekly_sent=1,
                 monthly_sent=2,
                 success_rate=33.33,
@@ -136,6 +148,10 @@ def test_dashboard_statistics_endpoint_returns_response(
         "total_download": 4,
         "total_reply": 1,
         "total_bounce": 2,
+        "total_open_by_mail": 2,
+        "total_click_by_mail": 2,
+        "total_download_by_mail": 2,
+        "total_reply_by_mail": 1,
         "weekly_sent": 1,
         "monthly_sent": 2,
         "success_rate": 33.33,
