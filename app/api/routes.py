@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from app.models.statistics import SampleStatistics
+from app.models.statistics import DashboardStatisticsResponse, SampleStatistics
 from app.models.sent_email_registration import (
     SentEmailRegistrationRequest,
     SentEmailRegistrationResponse,
@@ -30,6 +30,7 @@ from app.services.database_tracking import (
     DatabaseUnavailableError,
     SentEmailRegistration,
 )
+from app.services.dashboard_statistics import DashboardStatisticsService
 from app.services.excel_tracking import ExcelTrackingService
 from app.services.tracking_debug import TrackingDebugService
 from app.services.tracking_pixel import get_transparent_pixel
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 settings = load_settings()
 tracking_service = ExcelTrackingService(settings.tracking_file)
 database_service = DatabaseTrackingService(settings.database_url)
+dashboard_statistics_service = DashboardStatisticsService(database_service)
 debug_service = TrackingDebugService(tracking_service.workbook_path)
 DEBUG_TAG = "Development / Debug Only"
 CLICK_TRACKING_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -560,6 +562,36 @@ async def get_statistics() -> SampleStatistics:
         total_clicks=0,
         message="Statistics tracking is not implemented yet.",
     )
+
+
+@router.get(
+    "/api/dashboard/statistics",
+    tags=["Dashboard"],
+    summary="Return dashboard tracking statistics",
+    response_model=DashboardStatisticsResponse,
+)
+async def get_dashboard_statistics() -> DashboardStatisticsResponse:
+    """Return aggregate dashboard statistics from PostgreSQL only."""
+    try:
+        result = await run_in_threadpool(
+            dashboard_statistics_service.get_statistics
+        )
+        logger.info(
+            "Dashboard statistics generated: total_sent=%d total_bounce=%d",
+            result.total_sent,
+            result.total_bounce,
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "Dashboard statistics failed: Error=%s",
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dashboard statistics are temporarily unavailable.",
+        ) from exc
 
 
 @router.get(

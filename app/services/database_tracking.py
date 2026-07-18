@@ -1,11 +1,11 @@
 """PostgreSQL persistence for email tracking events."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 from pathlib import PurePath, PureWindowsPath
 
-from sqlalchemy import Engine, create_engine, func, inspect, select, text, update
+from sqlalchemy import Engine, case, create_engine, func, inspect, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import TrackingAttachment
@@ -559,6 +559,60 @@ class DatabaseTrackingService:
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to fetch PostgreSQL synchronization records: {exc}"
+            ) from exc
+
+    def fetch_dashboard_statistics_totals(
+        self,
+        generated_at: datetime | None = None,
+    ) -> dict[str, int]:
+        """Return dashboard summary totals using SQL aggregate functions only."""
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(generated_at or datetime.now(timezone.utc))
+        weekly_threshold = timestamp - timedelta(days=7)
+        monthly_threshold = timestamp - timedelta(days=30)
+
+        statement = select(
+            func.count(EmailTracking.id).label("total_sent"),
+            func.coalesce(func.sum(EmailTracking.open_count), 0).label("total_open"),
+            func.coalesce(func.sum(EmailTracking.click_count), 0).label("total_click"),
+            func.coalesce(func.sum(EmailTracking.download_count), 0).label(
+                "total_download"
+            ),
+            func.coalesce(func.sum(EmailTracking.reply_count), 0).label("total_reply"),
+            func.coalesce(
+                func.sum(case((EmailTracking.is_bounce == 1, 1), else_=0)),
+                0,
+            ).label("total_bounce"),
+            func.coalesce(
+                func.sum(
+                    case((EmailTracking.created_at >= weekly_threshold, 1), else_=0)
+                ),
+                0,
+            ).label("weekly_sent"),
+            func.coalesce(
+                func.sum(
+                    case((EmailTracking.created_at >= monthly_threshold, 1), else_=0)
+                ),
+                0,
+            ).label("monthly_sent"),
+        )
+
+        try:
+            with session_factory() as session:
+                row = session.execute(statement).mappings().one()
+                return {
+                    "total_sent": int(row["total_sent"] or 0),
+                    "total_open": int(row["total_open"] or 0),
+                    "total_click": int(row["total_click"] or 0),
+                    "total_download": int(row["total_download"] or 0),
+                    "total_reply": int(row["total_reply"] or 0),
+                    "total_bounce": int(row["total_bounce"] or 0),
+                    "weekly_sent": int(row["weekly_sent"] or 0),
+                    "monthly_sent": int(row["monthly_sent"] or 0),
+                }
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to fetch dashboard statistics totals: {exc}"
             ) from exc
 
     def mark_synchronized(
