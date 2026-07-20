@@ -633,6 +633,60 @@ class DatabaseTrackingService:
                 f"Unable to fetch dashboard statistics totals: {exc}"
             ) from exc
 
+    def count_report_records(self) -> int:
+        """Return the total number of email tracking rows for reporting."""
+        session_factory = self._require_session_factory()
+        try:
+            with session_factory() as session:
+                return int(
+                    session.scalar(select(func.count(EmailTracking.id)))
+                    or 0
+                )
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to count report records: {exc}"
+            ) from exc
+
+    def fetch_report_records(
+        self,
+        offset: int,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        """Return one report page ordered by newest sent records first."""
+        session_factory = self._require_session_factory()
+        statement = (
+            select(
+                EmailTracking.tracking_id,
+                EmailTracking.sender_email,
+                EmailTracking.recipient_email.label("receiver_email"),
+                EmailTracking.project_name,
+                EmailTracking.created_at.label("send_date"),
+                func.coalesce(EmailTracking.open_count, 0).label("open_count"),
+                func.coalesce(EmailTracking.click_count, 0).label("click_count"),
+                func.coalesce(EmailTracking.download_count, 0).label("download_count"),
+                func.coalesce(EmailTracking.reply_count, 0).label("reply_count"),
+                EmailTracking.is_bounce,
+            )
+            .order_by(EmailTracking.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+
+        try:
+            with session_factory() as session:
+                rows = session.execute(statement).mappings()
+                return [
+                    {
+                        **dict(row),
+                        "is_bounce": bool(row["is_bounce"]),
+                    }
+                    for row in rows
+                ]
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to fetch report records: {exc}"
+            ) from exc
+
     def mark_synchronized(
         self,
         tracking_id: str,

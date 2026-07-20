@@ -20,6 +20,7 @@ from app.models.sent_email_registration import (
 )
 from app.models.bounce_tracking import BounceTrackingRequest, BounceTrackingResponse
 from app.models.reply_tracking import ReplyTrackingRequest, ReplyTrackingResponse
+from app.models.report import ReportResponse
 from app.models.tracking_sync import (
     MarkSynchronizedRequest,
     MarkSynchronizedResponse,
@@ -32,6 +33,7 @@ from app.services.database_tracking import (
 )
 from app.services.dashboard_statistics import DashboardStatisticsService
 from app.services.excel_tracking import ExcelTrackingService
+from app.services.reporting import ReportingService
 from app.services.tracking_debug import TrackingDebugService
 from app.services.tracking_pixel import get_transparent_pixel
 from app.utils.url_validation import is_valid_http_url
@@ -44,6 +46,7 @@ settings = load_settings()
 tracking_service = ExcelTrackingService(settings.tracking_file)
 database_service = DatabaseTrackingService(settings.database_url)
 dashboard_statistics_service = DashboardStatisticsService(database_service)
+reporting_service = ReportingService(database_service)
 debug_service = TrackingDebugService(tracking_service.workbook_path)
 DEBUG_TAG = "Development / Debug Only"
 CLICK_TRACKING_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -592,6 +595,50 @@ async def get_dashboard_statistics() -> DashboardStatisticsResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Dashboard statistics are temporarily unavailable.",
         ) from exc
+
+
+@router.get(
+    "/api/report",
+    tags=["Reports"],
+    summary="Return paginated tracking report rows",
+    response_model=ReportResponse,
+)
+async def get_report(
+    page: int = Query(default=1, description="Report page number."),
+    page_size: int = Query(default=20, description="Rows per page, maximum 100."),
+) -> ReportResponse:
+    """Return tracking rows using server-side pagination."""
+    started_at = time.perf_counter()
+    try:
+        result = await run_in_threadpool(
+            reporting_service.get_report,
+            page,
+            page_size,
+        )
+    except Exception as exc:
+        logger.error(
+            "Report request failed: RequestedPage=%s RequestedPageSize=%s Error=%s",
+            page,
+            page_size,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Report data is temporarily unavailable.",
+        ) from exc
+
+    execution_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "Report requested: RequestedPage=%s RequestedPageSize=%s TotalRecords=%d "
+        "ReturnedRows=%d ExecutionTime=%.2fms",
+        page,
+        page_size,
+        result.total_records,
+        len(result.items),
+        execution_ms,
+    )
+    return result
 
 
 @router.get(
