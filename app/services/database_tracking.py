@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.attachment import TrackingAttachment
 from app.models.email_tracking import Base, EmailTracking
+from app.models.report import ReportFilters
 from app.services.alembic_migrations import run_pending_migrations
 
 logger = logging.getLogger(__name__)
@@ -633,15 +634,16 @@ class DatabaseTrackingService:
                 f"Unable to fetch dashboard statistics totals: {exc}"
             ) from exc
 
-    def count_report_records(self) -> int:
+    def count_report_records(self, filters: ReportFilters | None = None) -> int:
         """Return the total number of email tracking rows for reporting."""
         session_factory = self._require_session_factory()
+        statement = select(func.count(EmailTracking.id))
+        conditions = self._report_filter_conditions(filters)
+        if conditions:
+            statement = statement.where(*conditions)
         try:
             with session_factory() as session:
-                return int(
-                    session.scalar(select(func.count(EmailTracking.id)))
-                    or 0
-                )
+                return int(session.scalar(statement) or 0)
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to count report records: {exc}"
@@ -651,9 +653,11 @@ class DatabaseTrackingService:
         self,
         offset: int,
         limit: int,
+        filters: ReportFilters | None = None,
     ) -> list[dict[str, object]]:
         """Return one report page ordered by newest sent records first."""
         session_factory = self._require_session_factory()
+        conditions = self._report_filter_conditions(filters)
         statement = (
             select(
                 EmailTracking.tracking_id,
@@ -667,10 +671,12 @@ class DatabaseTrackingService:
                 func.coalesce(EmailTracking.reply_count, 0).label("reply_count"),
                 EmailTracking.is_bounce,
             )
-            .order_by(EmailTracking.created_at.desc())
-            .offset(offset)
-            .limit(limit)
         )
+        if conditions:
+            statement = statement.where(*conditions)
+        statement = statement.order_by(EmailTracking.created_at.desc()).offset(
+            offset
+        ).limit(limit)
 
         try:
             with session_factory() as session:
@@ -686,6 +692,100 @@ class DatabaseTrackingService:
             raise DatabaseUnavailableError(
                 f"Unable to fetch report records: {exc}"
             ) from exc
+
+    def fetch_report_filter_options(self) -> dict[str, list[str]]:
+        """Return distinct report filter values using database-side DISTINCT."""
+        session_factory = self._require_session_factory()
+        trimmed_sender = func.trim(EmailTracking.sender_email)
+        trimmed_project = func.trim(EmailTracking.project_name)
+        sender_statement = (
+            select(func.distinct(trimmed_sender).label("value"))
+            .where(
+                EmailTracking.sender_email.is_not(None),
+                trimmed_sender != "",
+            )
+            .order_by(trimmed_sender.asc())
+        )
+        project_statement = (
+            select(func.distinct(trimmed_project).label("value"))
+            .where(
+                EmailTracking.project_name.is_not(None),
+                trimmed_project != "",
+            )
+            .order_by(trimmed_project.asc())
+        )
+
+        try:
+            with session_factory() as session:
+                sender_emails = [
+                    str(value)
+                    for value in session.execute(sender_statement).scalars()
+                ]
+                project_names = [
+                    str(value)
+                    for value in session.execute(project_statement).scalars()
+                ]
+                return {
+                    "sender_emails": sender_emails,
+                    "project_names": project_names,
+                }
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to fetch report filter options: {exc}"
+            ) from exc
+
+    @staticmethod
+    def report_export_columns() -> list[str]:
+        """Return all email_tracking database column names for Excel export."""
+        return [column.name for column in EmailTracking.__table__.columns]
+
+    def iter_report_export_records(
+        self,
+        filters: ReportFilters | None = None,
+    ):
+        """Yield all filtered email_tracking rows for report export."""
+        session_factory = self._require_session_factory()
+        columns = list(EmailTracking.__table__.columns)
+        conditions = self._report_filter_conditions(filters)
+        statement = select(*columns)
+        if conditions:
+            statement = statement.where(*conditions)
+        statement = statement.order_by(EmailTracking.created_at.desc())
+
+        try:
+            with session_factory() as session:
+                rows = session.execute(
+                    statement.execution_options(stream_results=True, yield_per=1000)
+                ).mappings()
+                for row in rows:
+                    yield dict(row)
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to export report records: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _report_filter_conditions(filters: ReportFilters | None) -> list[object]:
+        """Build SQLAlchemy report filters without evaluating rows in Python."""
+        if filters is None:
+            return []
+
+        conditions: list[object] = []
+        if filters.sender_email:
+            conditions.append(EmailTracking.sender_email == filters.sender_email)
+        if filters.project_name:
+            conditions.append(EmailTracking.project_name == filters.project_name)
+        if filters.is_reply:
+            conditions.append(func.coalesce(EmailTracking.reply_count, 0) > 0)
+        if filters.is_bounce:
+            conditions.append(EmailTracking.is_bounce == 1)
+        if filters.is_open:
+            conditions.append(func.coalesce(EmailTracking.open_count, 0) > 0)
+        if filters.is_click:
+            conditions.append(func.coalesce(EmailTracking.click_count, 0) > 0)
+        if filters.is_download:
+            conditions.append(func.coalesce(EmailTracking.download_count, 0) > 0)
+        return conditions
 
     def mark_synchronized(
         self,

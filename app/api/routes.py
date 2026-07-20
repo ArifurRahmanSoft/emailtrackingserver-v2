@@ -6,11 +6,18 @@ import platform
 import re
 import time
 from datetime import datetime, timezone
+from io import BytesIO
 
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, status
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from starlette.concurrency import run_in_threadpool
 
 from app.models.statistics import DashboardStatisticsResponse, SampleStatistics
@@ -20,7 +27,7 @@ from app.models.sent_email_registration import (
 )
 from app.models.bounce_tracking import BounceTrackingRequest, BounceTrackingResponse
 from app.models.reply_tracking import ReplyTrackingRequest, ReplyTrackingResponse
-from app.models.report import ReportResponse
+from app.models.report import ReportFilterOptionsResponse, ReportResponse
 from app.models.tracking_sync import (
     MarkSynchronizedRequest,
     MarkSynchronizedResponse,
@@ -606,20 +613,45 @@ async def get_dashboard_statistics() -> DashboardStatisticsResponse:
 async def get_report(
     page: int = Query(default=1, description="Report page number."),
     page_size: int = Query(default=20, description="Rows per page, maximum 100."),
+    sender_email: str | None = Query(default=None, description="Exact sender email."),
+    project_name: str | None = Query(default=None, description="Exact project name."),
+    is_reply: bool = Query(default=False, description="Only rows with replies."),
+    is_bounce: bool = Query(default=False, description="Only bounced rows."),
+    is_open: bool = Query(default=False, description="Only opened rows."),
+    is_click: bool = Query(default=False, description="Only clicked rows."),
+    is_download: bool = Query(default=False, description="Only downloaded rows."),
 ) -> ReportResponse:
     """Return tracking rows using server-side pagination."""
     started_at = time.perf_counter()
+    filters = ReportingService.build_filters(
+        sender_email=sender_email,
+        project_name=project_name,
+        is_reply=is_reply,
+        is_bounce=is_bounce,
+        is_open=is_open,
+        is_click=is_click,
+        is_download=is_download,
+    )
     try:
         result = await run_in_threadpool(
             reporting_service.get_report,
             page,
             page_size,
+            sender_email,
+            project_name,
+            is_reply,
+            is_bounce,
+            is_open,
+            is_click,
+            is_download,
         )
     except Exception as exc:
         logger.error(
-            "Report request failed: RequestedPage=%s RequestedPageSize=%s Error=%s",
+            "Report request failed: RequestedPage=%s RequestedPageSize=%s "
+            "AppliedFilters=%s Error=%s",
             page,
             page_size,
+            filters,
             exc,
             exc_info=True,
         )
@@ -631,14 +663,117 @@ async def get_report(
     execution_ms = (time.perf_counter() - started_at) * 1000
     logger.info(
         "Report requested: RequestedPage=%s RequestedPageSize=%s TotalRecords=%d "
-        "ReturnedRows=%d ExecutionTime=%.2fms",
+        "ReturnedRows=%d AppliedFilters=%s ExecutionTime=%.2fms",
         page,
         page_size,
         result.total_records,
         len(result.items),
+        filters,
         execution_ms,
     )
     return result
+
+
+@router.get(
+    "/api/report/filter-options",
+    tags=["Reports"],
+    summary="Return available report filter dropdown values",
+    response_model=ReportFilterOptionsResponse,
+)
+async def get_report_filter_options() -> ReportFilterOptionsResponse:
+    """Return distinct sender email and project name filter options."""
+    started_at = time.perf_counter()
+    logger.info("Report filter options requested")
+    try:
+        result = await run_in_threadpool(reporting_service.get_filter_options)
+    except Exception as exc:
+        logger.error(
+            "Report filter options failed: Error=%s",
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Report filter options are temporarily unavailable.",
+        ) from exc
+
+    execution_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "Report filter options returned: SenderEmails=%d ProjectNames=%d "
+        "ExecutionTime=%.2fms",
+        len(result.sender_emails),
+        len(result.project_names),
+        execution_ms,
+    )
+    return result
+
+
+@router.get(
+    "/api/report/export",
+    tags=["Reports"],
+    summary="Export filtered report rows to Excel",
+    response_class=StreamingResponse,
+)
+async def export_report(
+    sender_email: str | None = Query(default=None, description="Exact sender email."),
+    project_name: str | None = Query(default=None, description="Exact project name."),
+    is_reply: bool = Query(default=False, description="Only rows with replies."),
+    is_bounce: bool = Query(default=False, description="Only bounced rows."),
+    is_open: bool = Query(default=False, description="Only opened rows."),
+    is_click: bool = Query(default=False, description="Only clicked rows."),
+    is_download: bool = Query(default=False, description="Only downloaded rows."),
+) -> StreamingResponse:
+    """Export every matching report row to an Excel workbook."""
+    started_at = time.perf_counter()
+    filters = ReportingService.build_filters(
+        sender_email=sender_email,
+        project_name=project_name,
+        is_reply=is_reply,
+        is_bounce=is_bounce,
+        is_open=is_open,
+        is_click=is_click,
+        is_download=is_download,
+    )
+    logger.info("Report export started: AppliedFilters=%s", filters)
+    try:
+        result = await run_in_threadpool(
+            reporting_service.export_report,
+            sender_email,
+            project_name,
+            is_reply,
+            is_bounce,
+            is_open,
+            is_click,
+            is_download,
+        )
+    except Exception as exc:
+        logger.error(
+            "Report export failed: AppliedFilters=%s Error=%s",
+            filters,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Report export is temporarily unavailable.",
+        ) from exc
+
+    execution_ms = (time.perf_counter() - started_at) * 1000
+    logger.info(
+        "Report export completed: AppliedFilters=%s TotalExportedRows=%d "
+        "GeneratedFilename=%s ExecutionTime=%.2fms",
+        filters,
+        result.row_count,
+        result.filename,
+        execution_ms,
+    )
+    return StreamingResponse(
+        BytesIO(result.content),
+        media_type=result.content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.filename}"',
+        },
+    )
 
 
 @router.get(

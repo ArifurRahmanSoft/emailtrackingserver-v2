@@ -1,8 +1,22 @@
 """Response models for paginated tracking reports."""
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import BaseModel
+
+
+@dataclass(frozen=True, slots=True)
+class ReportFilters:
+    """Optional report filters applied before pagination."""
+
+    sender_email: str | None = None
+    project_name: str | None = None
+    is_reply: bool = False
+    is_bounce: bool = False
+    is_open: bool = False
+    is_click: bool = False
+    is_download: bool = False
 
 
 class ReportItem(BaseModel):
@@ -30,3 +44,10 @@ class ReportResponse(BaseModel):
     has_next_page: bool
     has_previous_page: bool
     items: list[ReportItem]
+
+
+class ReportFilterOptionsResponse(BaseModel):
+    """Dropdown option values available for report filters."""
+
+    sender_emails: list[str]
+    project_names: list[str]
