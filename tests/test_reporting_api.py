@@ -637,6 +637,82 @@ def test_export_all_records_returns_xlsx_with_all_database_columns() -> None:
     ]
 
 
+def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_database() -> None:
+    service, session_factory, _ = build_reporting_service()
+    stored_utc = datetime(2026, 7, 21, 5, 55, 26, 297000, tzinfo=timezone.utc)
+    expected_excel_time = stored_utc.astimezone(BANGLADESH_TIMEZONE).replace(
+        tzinfo=None
+    )
+    datetime_columns = [
+        "last_synchronize_time",
+        "first_reply",
+        "last_reply",
+        "bounce_time",
+        "first_open",
+        "last_open",
+        "first_click",
+        "last_click",
+        "first_download",
+        "last_download",
+        "created_at",
+        "updated_at",
+    ]
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="datetime-export-full",
+                    sender_email="time@example.com",
+                    recipient_email="receiver@example.com",
+                    last_synchronize_time=stored_utc,
+                    first_reply=stored_utc,
+                    last_reply=stored_utc,
+                    bounce_time=stored_utc,
+                    first_open=stored_utc,
+                    last_open=stored_utc,
+                    first_click=stored_utc,
+                    last_click=stored_utc,
+                    first_download=stored_utc,
+                    last_download=stored_utc,
+                    created_at=stored_utc,
+                    updated_at=stored_utc,
+                ),
+                EmailTracking(
+                    tracking_id="datetime-export-null",
+                    sender_email="time@example.com",
+                    recipient_email="receiver-null@example.com",
+                    created_at=stored_utc - timedelta(minutes=1),
+                    updated_at=stored_utc - timedelta(minutes=1),
+                    first_reply=None,
+                ),
+            ]
+        )
+        session.commit()
+
+    result = service.export_report(sender_email="time@example.com")
+    rows = export_rows(result.content)
+    headers = list(rows[0])
+    row_by_tracking_id = {
+        row[headers.index("tracking_id")]: row
+        for row in rows[1:]
+    }
+    full_row = row_by_tracking_id["datetime-export-full"]
+
+    for column in datetime_columns:
+        assert full_row[headers.index(column)] == expected_excel_time
+
+    null_row = row_by_tracking_id["datetime-export-null"]
+    assert null_row[headers.index("first_reply")] is None
+
+    with session_factory() as session:
+        stored_created_at = (
+            session.query(EmailTracking.created_at)
+            .filter(EmailTracking.tracking_id == "datetime-export-full")
+            .scalar()
+        )
+    assert stored_created_at.replace(tzinfo=timezone.utc) == stored_utc
+
+
 def test_export_filtered_by_sender_email() -> None:
     service, session_factory, _ = build_reporting_service()
     seed_filter_records(session_factory)

@@ -23,6 +23,20 @@ REPORT_RESPONSE_TIMEZONE = ZoneInfo("Asia/Dhaka")
 REPORT_EXPORT_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+REPORT_EXPORT_BST_DATETIME_COLUMNS = {
+    "last_synchronize_time",
+    "first_reply",
+    "last_reply",
+    "bounce_time",
+    "first_open",
+    "last_open",
+    "first_click",
+    "last_click",
+    "first_download",
+    "last_download",
+    "created_at",
+    "updated_at",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +170,9 @@ class ReportingService:
 
         row_count = 0
         for row in self._database_service.iter_report_export_records(filters):
-            worksheet.append([self._excel_cell(row.get(column)) for column in columns])
+            worksheet.append(
+                [self._excel_cell(column, row.get(column)) for column in columns]
+            )
             row_count += 1
 
         output = BytesIO()
@@ -169,12 +185,12 @@ class ReportingService:
         )
 
     @staticmethod
-    def _excel_cell(value: object) -> object:
+    def _excel_cell(column: str, value: object) -> object:
         """Convert values into Excel-safe cell values."""
-        if isinstance(value, datetime):
-            if value.tzinfo is not None:
-                return value.astimezone(timezone.utc).replace(tzinfo=None)
-            return value
+        if column in REPORT_EXPORT_BST_DATETIME_COLUMNS and isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.astimezone(REPORT_RESPONSE_TIMEZONE).replace(tzinfo=None)
         return value
 
     @classmethod
