@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from math import ceil
+from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
 
@@ -18,6 +19,7 @@ from app.services.database_tracking import DatabaseTrackingService
 DEFAULT_PAGE = 1
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+REPORT_RESPONSE_TIMEZONE = ZoneInfo("Asia/Dhaka")
 REPORT_EXPORT_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
@@ -76,6 +78,7 @@ class ReportingService:
             limit=normalized_page_size,
             filters=filters,
         )
+        response_rows = [self._report_response_row(row) for row in rows]
 
         return ReportResponse(
             page=normalized_page,
@@ -84,7 +87,7 @@ class ReportingService:
             total_pages=total_pages,
             has_next_page=normalized_page < total_pages,
             has_previous_page=normalized_page > 1 and total_pages > 0,
-            items=rows,
+            items=response_rows,
         )
 
     @staticmethod
@@ -173,3 +176,14 @@ class ReportingService:
                 return value.astimezone(timezone.utc).replace(tzinfo=None)
             return value
         return value
+
+    @classmethod
+    def _report_response_row(cls, row: dict[str, object]) -> dict[str, object]:
+        """Convert only report response send_date from stored UTC to Asia/Dhaka."""
+        response_row = dict(row)
+        send_date = response_row.get("send_date")
+        if isinstance(send_date, datetime):
+            if send_date.tzinfo is None:
+                send_date = send_date.replace(tzinfo=timezone.utc)
+            response_row["send_date"] = send_date.astimezone(REPORT_RESPONSE_TIMEZONE)
+        return response_row

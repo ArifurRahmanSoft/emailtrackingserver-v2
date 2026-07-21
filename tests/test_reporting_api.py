@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,9 @@ from app.services.reporting import (
     ReportingService,
 )
 from main import app
+
+
+BANGLADESH_TIMEZONE = ZoneInfo("Asia/Dhaka")
 
 
 def build_reporting_service() -> tuple[ReportingService, sessionmaker, object]:
@@ -239,12 +243,21 @@ def test_report_items_map_required_fields() -> None:
     assert item.sender_email == "sender@example.com"
     assert item.receiver_email == "receiver@example.com"
     assert item.project_name == "Mapped Project"
-    assert item.send_date.replace(tzinfo=None) == created_at.replace(tzinfo=None)
+    assert item.send_date == created_at.astimezone(BANGLADESH_TIMEZONE)
+    assert item.send_date.utcoffset() == timedelta(hours=6)
     assert item.open_count == 10
     assert item.click_count == 3
     assert item.download_count == 2
     assert item.reply_count == 1
     assert item.is_bounce is True
+
+    with session_factory() as session:
+        stored_created_at = (
+            session.query(EmailTracking.created_at)
+            .filter(EmailTracking.tracking_id == "field-map")
+            .scalar()
+        )
+    assert stored_created_at.replace(tzinfo=timezone.utc) == created_at
 
 
 def test_report_executes_one_count_and_one_select_query() -> None:
