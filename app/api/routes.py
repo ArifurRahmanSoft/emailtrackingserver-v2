@@ -184,11 +184,18 @@ async def register_reply(
         message_id = payload.message_id.strip() if payload.message_id else ""
         client_ip = request.client.host if request.client else "unknown"
         user_agent = request.headers.get("user-agent", "unknown")
+        reply_session_id = (
+            request.headers.get("x-session-id")
+            or request.headers.get("x-sync-session-id")
+            or request.headers.get("session-id")
+            or "N/A"
+        ).strip() or "N/A"
 
         logger.info(
             "register-reply request received before database query: "
-            "message_id=%s client_ip=%s user_agent=%s request_body=%s",
+            "message_id=%s session_id=%s client_ip=%s user_agent=%s request_body=%s",
             message_id,
+            reply_session_id,
             client_ip,
             user_agent,
             request_body,
@@ -214,6 +221,7 @@ async def register_reply(
             database_service.record_reply,
             message_id,
             reply_time,
+            reply_session_id,
         )
 
         logger.info(

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 from pathlib import PurePath, PureWindowsPath
+from threading import Lock
 
 from sqlalchemy import Engine, case, create_engine, func, inspect, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -87,6 +88,9 @@ class SentEmailRegistrationResult:
 
 class DatabaseTrackingService:
     """Create the schema and mirror successful Excel tracking writes."""
+
+    _reply_update_diagnostic_lock = Lock()
+    _reply_update_diagnostic_keys: set[tuple[str, str]] = set()
 
     def __init__(self, database_url: str | None) -> None:
         self._database_url = database_url
@@ -210,6 +214,7 @@ class DatabaseTrackingService:
         self,
         message_id: str,
         occurred_at: datetime | None = None,
+        session_id: str | None = None,
     ) -> ReplyUpdateResult | None:
         """Update an existing tracking row for one recipient reply.
 
@@ -219,6 +224,9 @@ class DatabaseTrackingService:
         session_factory = self._require_session_factory()
         timestamp = self._as_utc(occurred_at or datetime.now(timezone.utc))
         message_id = message_id.strip()
+        diagnostic_session_id = session_id.strip() if session_id else "N/A"
+        if not diagnostic_session_id:
+            diagnostic_session_id = "N/A"
 
         try:
             with session_factory() as session:
@@ -243,6 +251,33 @@ class DatabaseTrackingService:
                 database_primary_key = lookup.id
                 tracking_id = lookup.tracking_id
                 reply_count_before_update = lookup.reply_count or 0
+                duplicate_key = (diagnostic_session_id, message_id)
+                with self._reply_update_diagnostic_lock:
+                    duplicate_update_detected = (
+                        duplicate_key in self._reply_update_diagnostic_keys
+                    )
+                    self._reply_update_diagnostic_keys.add(duplicate_key)
+
+                if duplicate_update_detected:
+                    logger.warning(
+                        "DUPLICATE DATABASE UPDATE DETECTED: session_id=%s "
+                        "message_id=%s tracking_id=%s database_primary_key=%s",
+                        diagnostic_session_id,
+                        message_id,
+                        tracking_id,
+                        database_primary_key,
+                    )
+
+                logger.info(
+                    "register-reply before database update: session_id=%s "
+                    "message_id=%s tracking_id=%s database_primary_key=%s "
+                    "reply_count_before_update=%d",
+                    diagnostic_session_id,
+                    message_id,
+                    tracking_id,
+                    database_primary_key,
+                    reply_count_before_update,
+                )
                 result = session.execute(
                     update(EmailTracking)
                     .where(EmailTracking.message_id == message_id)
@@ -259,6 +294,7 @@ class DatabaseTrackingService:
                 if result.rowcount == 0:
                     session.rollback()
                     return None
+                rows_updated = result.rowcount
 
                 record = session.execute(
                     select(
@@ -281,6 +317,16 @@ class DatabaseTrackingService:
                     database_primary_key,
                     reply_count_before_update,
                     reply_count or 0,
+                )
+                logger.info(
+                    "register-reply after database update: message_id=%s "
+                    "tracking_id=%s database_primary_key=%s "
+                    "reply_count_after_update=%d rows_updated=%s commit_success=true",
+                    message_id,
+                    tracking_id,
+                    database_primary_key,
+                    reply_count or 0,
+                    rows_updated,
                 )
                 return ReplyUpdateResult(
                     tracking_id=tracking_id,

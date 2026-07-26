@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import app.api.routes as route_module
+import app.services.database_tracking as database_tracking_module
 from app.models.email_tracking import Base, EmailTracking
 from app.services.database_tracking import DatabaseTrackingService, ReplyUpdateResult
 from main import app
@@ -33,8 +34,14 @@ def build_database_service(database_url: str = "sqlite+pysqlite:///:memory:"):
 
 def test_unknown_message_id_returns_http_404(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeReplyDatabase:
-        def record_reply(self, message_id: str, occurred_at: datetime | None = None):
+        def record_reply(
+            self,
+            message_id: str,
+            occurred_at: datetime | None = None,
+            session_id: str | None = None,
+        ):
             assert message_id == "unknown-message@example.com"
+            assert session_id == "N/A"
             return None
 
     monkeypatch.setattr(route_module, "database_service", FakeReplyDatabase())
@@ -85,9 +92,15 @@ def test_first_and_second_reply_update_existing_row() -> None:
 
 def test_reply_endpoint_returns_updated_counter(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeReplyDatabase:
-        def record_reply(self, message_id: str, occurred_at: datetime | None = None):
+        def record_reply(
+            self,
+            message_id: str,
+            occurred_at: datetime | None = None,
+            session_id: str | None = None,
+        ):
             assert message_id == MESSAGE_ID
             assert occurred_at is not None
+            assert session_id == "sync-run-123"
             return ReplyUpdateResult(
                 tracking_id=TRACKING_ID,
                 reply_count=1,
@@ -107,7 +120,10 @@ def test_reply_endpoint_returns_updated_counter(monkeypatch: pytest.MonkeyPatch)
             "reply_time": "2026-07-11T08:00:00Z",
             "from_email": "recipient@example.com",
         },
-        headers={"User-Agent": "ReplyTrackingTest/1.0"},
+        headers={
+            "User-Agent": "ReplyTrackingTest/1.0",
+            "X-Session-ID": "sync-run-123",
+        },
     )
 
     assert response.status_code == 200
@@ -115,6 +131,44 @@ def test_reply_endpoint_returns_updated_counter(monkeypatch: pytest.MonkeyPatch)
     assert response.json()["message_id"] == MESSAGE_ID
     assert response.json()["tracking_id"] == TRACKING_ID
     assert response.json()["reply_count"] == 1
+
+
+def test_duplicate_reply_database_update_is_logged_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_database_service()
+    reply_time = datetime(2026, 7, 11, 8, 0, tzinfo=timezone.utc)
+    session_id = "sync-run-duplicate"
+    DatabaseTrackingService._reply_update_diagnostic_keys.clear()
+    warnings: list[str] = []
+
+    def capture_warning(message: str, *args: object) -> None:
+        warnings.append(message % args)
+
+    monkeypatch.setattr(database_tracking_module.logger, "warning", capture_warning)
+
+    with session_factory() as session:
+        session.add(
+            EmailTracking(
+                tracking_id=TRACKING_ID,
+                message_id=MESSAGE_ID,
+                reply_count=0,
+            )
+        )
+        session.commit()
+
+    first = service.record_reply(MESSAGE_ID, reply_time, session_id)
+    second = service.record_reply(
+        MESSAGE_ID,
+        reply_time + timedelta(minutes=1),
+        session_id,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.reply_count == 1
+    assert second.reply_count == 2
+    assert any("DUPLICATE DATABASE UPDATE DETECTED" in warning for warning in warnings)
 
 
 def test_concurrent_replies_increment_without_lost_updates(tmp_path) -> None:
