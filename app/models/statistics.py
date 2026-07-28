@@ -31,3 +31,5 @@ class DashboardStatisticsResponse(BaseModel):
     success_rate: float
     failure_rate: float
     last_updated: datetime
+    total_unsubscribe: int
+    last_unsubscribe_time: datetime | None

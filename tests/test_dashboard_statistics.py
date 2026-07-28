@@ -47,6 +47,8 @@ def test_empty_database_returns_zero_statistics() -> None:
     assert result.success_rate == 0.0
     assert result.failure_rate == 0.0
     assert result.last_updated == generated_at
+    assert result.total_unsubscribe == 0
+    assert result.last_unsubscribe_time is None
 
 
 def test_existing_tracking_data_returns_aggregate_statistics() -> None:
@@ -63,6 +65,7 @@ def test_existing_tracking_data_returns_aggregate_statistics() -> None:
                     download_count=3,
                     reply_count=1,
                     is_bounce=0,
+                    unsubscribe=0,
                     created_at=generated_at - timedelta(days=2),
                 ),
                 EmailTracking(
@@ -72,6 +75,8 @@ def test_existing_tracking_data_returns_aggregate_statistics() -> None:
                     download_count=1,
                     reply_count=0,
                     is_bounce=1,
+                    unsubscribe=1,
+                    unsubscribe_time=generated_at - timedelta(hours=3),
                     created_at=generated_at - timedelta(days=20),
                 ),
                 EmailTracking(
@@ -81,6 +86,8 @@ def test_existing_tracking_data_returns_aggregate_statistics() -> None:
                     download_count=None,
                     reply_count=None,
                     is_bounce=1,
+                    unsubscribe=1,
+                    unsubscribe_time=generated_at - timedelta(hours=1),
                     created_at=generated_at - timedelta(days=45),
                 ),
             ]
@@ -104,6 +111,11 @@ def test_existing_tracking_data_returns_aggregate_statistics() -> None:
     assert result.success_rate == 33.33
     assert result.failure_rate == 66.67
     assert result.last_updated == generated_at
+    assert result.total_unsubscribe == 2
+    assert result.last_unsubscribe_time is not None
+    assert result.last_unsubscribe_time.replace(tzinfo=None) == (
+        generated_at - timedelta(hours=1)
+    ).replace(tzinfo=None)
 
 
 def test_dashboard_statistics_endpoint_returns_response(
@@ -129,6 +141,8 @@ def test_dashboard_statistics_endpoint_returns_response(
                 success_rate=33.33,
                 failure_rate=66.67,
                 last_updated=generated_at,
+                total_unsubscribe=2,
+                last_unsubscribe_time=generated_at - timedelta(hours=1),
             )
 
     monkeypatch.setattr(
@@ -157,4 +171,6 @@ def test_dashboard_statistics_endpoint_returns_response(
         "success_rate": 33.33,
         "failure_rate": 66.67,
         "last_updated": "2026-07-18T10:30:00Z",
+        "total_unsubscribe": 2,
+        "last_unsubscribe_time": "2026-07-18T09:30:00Z",
     }

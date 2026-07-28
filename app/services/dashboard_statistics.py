@@ -52,4 +52,6 @@ class DashboardStatisticsService:
             success_rate=success_rate,
             failure_rate=failure_rate,
             last_updated=last_updated,
+            total_unsubscribe=totals["total_unsubscribe"],
+            last_unsubscribe_time=totals["last_unsubscribe_time"],
         )

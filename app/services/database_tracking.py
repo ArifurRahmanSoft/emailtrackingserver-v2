@@ -756,6 +756,11 @@ class DatabaseTrackingService:
                 0,
             ).label("total_bounce"),
             func.coalesce(
+                func.sum(case((EmailTracking.unsubscribe == 1, 1), else_=0)),
+                0,
+            ).label("total_unsubscribe"),
+            func.max(EmailTracking.unsubscribe_time).label("last_unsubscribe_time"),
+            func.coalesce(
                 func.sum(
                     case((EmailTracking.created_at >= weekly_threshold, 1), else_=0)
                 ),
@@ -785,6 +790,8 @@ class DatabaseTrackingService:
                     ),
                     "total_reply_by_mail": int(row["total_reply_by_mail"] or 0),
                     "total_bounce": int(row["total_bounce"] or 0),
+                    "total_unsubscribe": int(row["total_unsubscribe"] or 0),
+                    "last_unsubscribe_time": row["last_unsubscribe_time"],
                     "weekly_sent": int(row["weekly_sent"] or 0),
                     "monthly_sent": int(row["monthly_sent"] or 0),
                 }
