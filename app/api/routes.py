@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     Response,
@@ -57,6 +58,54 @@ reporting_service = ReportingService(database_service)
 debug_service = TrackingDebugService(tracking_service.workbook_path)
 DEBUG_TAG = "Development / Debug Only"
 CLICK_TRACKING_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+UNSUBSCRIBE_SUCCESS_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Successfully Unsubscribed</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f6f7fb;
+      color: #1f2937;
+      display: flex;
+      min-height: 100vh;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    main {
+      max-width: 560px;
+      width: 100%;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 20px 45px rgba(15, 23, 42, 0.12);
+      padding: 40px 28px;
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: clamp(28px, 5vw, 40px);
+      line-height: 1.15;
+    }
+    p {
+      margin: 8px 0;
+      font-size: 18px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Successfully Unsubscribed</h1>
+    <p>You have successfully unsubscribed.</p>
+    <p>You will no longer receive emails from us.</p>
+  </main>
+</body>
+</html>
+"""
 
 # Tracking IDs remain URL-safe and must contain at least one character.
 TrackingId = Annotated[
@@ -371,6 +420,83 @@ async def register_bounce(
     except Exception:
         logger.exception("register-bounce failed")
         raise
+
+
+@router.get(
+    "/unsubscribe/{tracking_id}",
+    tags=["Tracking"],
+    summary="Unsubscribe a recipient from future emails",
+    response_class=HTMLResponse,
+    responses={
+        200: {"description": "Recipient unsubscribed successfully"},
+        404: {"description": "Tracking ID not found"},
+    },
+)
+async def unsubscribe_recipient(
+    tracking_id: str,
+    request: Request,
+) -> HTMLResponse:
+    """Mark one tracking row as unsubscribed and return a simple success page."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    unsubscribe_time = datetime.now(timezone.utc)
+
+    try:
+        result = await run_in_threadpool(
+            database_service.record_unsubscribe,
+            tracking_id,
+            client_ip,
+            user_agent,
+            unsubscribe_time,
+        )
+    except DatabaseUnavailableError as exc:
+        logger.error(
+            "Unsubscribe failed: tracking_id=%s client_ip=%s user_agent=%s "
+            "error=%s",
+            tracking_id,
+            client_ip,
+            user_agent,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unsubscribe is temporarily unavailable.",
+        ) from exc
+
+    if result is None:
+        logger.warning(
+            "Unsubscribe failed request: tracking_id=%s client_ip=%s "
+            "user_agent=%s status=not_found",
+            tracking_id,
+            client_ip,
+            user_agent,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tracking ID not found.",
+        )
+
+    logger.info(
+        "Unsubscribe request completed: tracking_id=%s recipient_email=%s "
+        "sender_email=%s client_ip=%s user_agent=%s "
+        "previous_unsubscribe=%s new_unsubscribe=%s unsubscribe_time=%s "
+        "commit_success=%s",
+        result.tracking_id,
+        result.recipient_email,
+        result.sender_email,
+        client_ip,
+        user_agent,
+        result.previous_unsubscribe,
+        result.unsubscribe,
+        (
+            result.unsubscribe_time.isoformat()
+            if result.unsubscribe_time is not None
+            else None
+        ),
+        result.commit_success,
+    )
+    return HTMLResponse(content=UNSUBSCRIBE_SUCCESS_HTML)
 
 
 @router.get(

@@ -29,6 +29,8 @@ REQUIRED_V2_COLUMNS = {
     "is_bounce",
     "bounce_time",
     "bounce_reason",
+    "unsubscribe",
+    "unsubscribe_time",
 }
 
 
@@ -130,7 +132,9 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
                     last_reply,
                     is_bounce,
                     bounce_time,
-                    bounce_reason
+                    bounce_reason,
+                    unsubscribe,
+                    unsubscribe_time
                 FROM email_tracking
                 WHERE tracking_id = 'legacy-v1-compatible'
                 """
@@ -149,6 +153,8 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
     assert row["is_bounce"] == 0
     assert row["bounce_time"] is None
     assert row["bounce_reason"] is None
+    assert row["unsubscribe"] in (False, 0)
+    assert row["unsubscribe_time"] is None
 
 
 def test_migrations_are_idempotent_for_existing_databases() -> None:
@@ -205,3 +211,5 @@ def test_legacy_tracking_rows_still_work_with_new_nullable_columns() -> None:
     assert record.is_bounce == 0
     assert record.bounce_time is None
     assert record.bounce_reason is None
+    assert record.unsubscribe is False
+    assert record.unsubscribe_time is None

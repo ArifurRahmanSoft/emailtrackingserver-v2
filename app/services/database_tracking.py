@@ -66,6 +66,20 @@ class BounceUpdateResult:
 
 
 @dataclass(frozen=True, slots=True)
+class UnsubscribeResult:
+    """Result of an unsubscribe link click."""
+
+    tracking_id: str
+    recipient_email: str | None
+    sender_email: str | None
+    previous_unsubscribe: bool
+    unsubscribe: bool
+    unsubscribe_time: datetime | None
+    database_primary_key: int
+    commit_success: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SentEmailRegistration:
     """Metadata captured by Version 2 immediately after a successful send."""
 
@@ -208,6 +222,105 @@ class DatabaseTrackingService:
         except Exception as exc:
             raise DatabaseUnavailableError(
                 f"Unable to update PostgreSQL click record: {exc}"
+            ) from exc
+
+    def record_unsubscribe(
+        self,
+        tracking_id: str,
+        client_ip: str,
+        user_agent: str,
+        occurred_at: datetime | None = None,
+    ) -> UnsubscribeResult | None:
+        """Mark an existing tracking row as unsubscribed.
+
+        The operation is idempotent. Once a row is unsubscribed, later clicks
+        return the same successful state without changing ``unsubscribe_time``.
+        """
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(occurred_at or datetime.now(timezone.utc))
+        tracking_id = tracking_id.strip()
+
+        try:
+            with session_factory() as session:
+                record = session.scalar(
+                    select(EmailTracking)
+                    .where(EmailTracking.tracking_id == tracking_id)
+                    .with_for_update()
+                )
+                if record is None:
+                    logger.warning(
+                        "Unsubscribe failed: tracking_id=%s client_ip=%s "
+                        "user_agent=%s reason=not_found",
+                        tracking_id,
+                        client_ip,
+                        user_agent,
+                    )
+                    return None
+
+                previous_unsubscribe = bool(record.unsubscribe)
+                if previous_unsubscribe:
+                    logger.info(
+                        "Unsubscribe requested for already unsubscribed row: "
+                        "tracking_id=%s recipient_email=%s sender_email=%s "
+                        "client_ip=%s user_agent=%s previous_unsubscribe=%s "
+                        "new_unsubscribe=%s unsubscribe_time=%s "
+                        "commit_success=not_required",
+                        tracking_id,
+                        record.recipient_email,
+                        record.sender_email,
+                        client_ip,
+                        user_agent,
+                        previous_unsubscribe,
+                        bool(record.unsubscribe),
+                        (
+                            record.unsubscribe_time.isoformat()
+                            if record.unsubscribe_time is not None
+                            else None
+                        ),
+                    )
+                    return UnsubscribeResult(
+                        tracking_id=tracking_id,
+                        recipient_email=record.recipient_email,
+                        sender_email=record.sender_email,
+                        previous_unsubscribe=previous_unsubscribe,
+                        unsubscribe=bool(record.unsubscribe),
+                        unsubscribe_time=record.unsubscribe_time,
+                        database_primary_key=record.id,
+                        commit_success=False,
+                    )
+
+                record.unsubscribe = True
+                record.unsubscribe_time = timestamp
+                record.updated_at = timestamp
+                session.commit()
+
+                logger.info(
+                    "Unsubscribe committed: tracking_id=%s recipient_email=%s "
+                    "sender_email=%s client_ip=%s user_agent=%s "
+                    "previous_unsubscribe=%s new_unsubscribe=%s "
+                    "unsubscribe_time=%s commit_success=true",
+                    tracking_id,
+                    record.recipient_email,
+                    record.sender_email,
+                    client_ip,
+                    user_agent,
+                    previous_unsubscribe,
+                    bool(record.unsubscribe),
+                    timestamp.isoformat(),
+                )
+                return UnsubscribeResult(
+                    tracking_id=tracking_id,
+                    recipient_email=record.recipient_email,
+                    sender_email=record.sender_email,
+                    previous_unsubscribe=previous_unsubscribe,
+                    unsubscribe=bool(record.unsubscribe),
+                    unsubscribe_time=record.unsubscribe_time,
+                    database_primary_key=record.id,
+                    commit_success=True,
+                )
+        except Exception as exc:
+            raise DatabaseUnavailableError(
+                f"Unable to update PostgreSQL unsubscribe record: {exc}"
             ) from exc
 
     def record_reply(

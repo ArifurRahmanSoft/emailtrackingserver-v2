@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -55,6 +55,12 @@ class EmailTracking(Base):
         DateTime(timezone=True), nullable=True
     )
     bounce_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsubscribe: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    unsubscribe_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     click_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     first_open: Mapped[datetime | None] = mapped_column(
