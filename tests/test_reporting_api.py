@@ -127,6 +127,23 @@ def export_rows(content: bytes) -> list[tuple[object, ...]]:
     return list(worksheet.iter_rows(values_only=True))
 
 
+def expected_export_headers() -> list[str]:
+    """Return expected report export headers with unsubscribe columns appended."""
+    return [
+        column
+        for column in DatabaseTrackingService.report_export_columns()
+        if column not in {"unsubscribe", "unsubscribe_time"}
+    ] + ["Unsubscribe", "Unsubscribe Time"]
+
+
+def row_value(row: tuple[object, ...], headers: list[str], header: str) -> object:
+    """Return a row cell value, treating omitted trailing blanks as None."""
+    index = headers.index(header)
+    if index >= len(row):
+        return None
+    return row[index]
+
+
 def test_default_pagination_returns_first_20_newest_rows() -> None:
     service, session_factory, _ = build_reporting_service()
     seed_records(session_factory, 25)
@@ -629,7 +646,8 @@ def test_export_all_records_returns_xlsx_with_all_database_columns() -> None:
     assert result.filename == "Report_20260720_103000.xlsx"
     assert result.content_type == REPORT_EXPORT_CONTENT_TYPE
     assert result.row_count == 3
-    assert headers == DatabaseTrackingService.report_export_columns()
+    assert headers == expected_export_headers()
+    assert headers[-2:] == ["Unsubscribe", "Unsubscribe Time"]
     assert [row[tracking_id_index] for row in rows[1:]] == [
         "report-000",
         "report-001",
@@ -654,6 +672,7 @@ def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_da
         "last_click",
         "first_download",
         "last_download",
+        "unsubscribe_time",
         "created_at",
         "updated_at",
     ]
@@ -674,6 +693,8 @@ def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_da
                     last_click=stored_utc,
                     first_download=stored_utc,
                     last_download=stored_utc,
+                    unsubscribe=1,
+                    unsubscribe_time=stored_utc,
                     created_at=stored_utc,
                     updated_at=stored_utc,
                 ),
@@ -681,6 +702,8 @@ def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_da
                     tracking_id="datetime-export-null",
                     sender_email="time@example.com",
                     recipient_email="receiver-null@example.com",
+                    unsubscribe=0,
+                    unsubscribe_time=None,
                     created_at=stored_utc - timedelta(minutes=1),
                     updated_at=stored_utc - timedelta(minutes=1),
                     first_reply=None,
@@ -699,10 +722,12 @@ def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_da
     full_row = row_by_tracking_id["datetime-export-full"]
 
     for column in datetime_columns:
-        assert full_row[headers.index(column)] == expected_excel_time
+        header = "Unsubscribe Time" if column == "unsubscribe_time" else column
+        assert full_row[headers.index(header)] == expected_excel_time
 
     null_row = row_by_tracking_id["datetime-export-null"]
     assert null_row[headers.index("first_reply")] is None
+    assert row_value(null_row, headers, "Unsubscribe Time") is None
 
     with session_factory() as session:
         stored_created_at = (
@@ -711,6 +736,72 @@ def test_export_converts_datetime_columns_to_bangladesh_time_without_updating_da
             .scalar()
         )
     assert stored_created_at.replace(tzinfo=timezone.utc) == stored_utc
+
+
+def test_export_appends_unsubscribe_columns_as_integer_and_bangladesh_time() -> None:
+    service, session_factory, _ = build_reporting_service()
+    first_time = datetime(2026, 7, 28, 4, 15, 21, 443000, tzinfo=timezone.utc)
+    expected_first_time = first_time.astimezone(BANGLADESH_TIMEZONE).replace(
+        tzinfo=None
+    )
+
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="unsubscribe-export-1",
+                    sender_email="unsubscribe@example.com",
+                    recipient_email="receiver-1@example.com",
+                    unsubscribe=1,
+                    unsubscribe_time=first_time,
+                ),
+                EmailTracking(
+                    tracking_id="unsubscribe-export-0",
+                    sender_email="unsubscribe@example.com",
+                    recipient_email="receiver-0@example.com",
+                    unsubscribe=0,
+                    unsubscribe_time=None,
+                    created_at=first_time - timedelta(minutes=1),
+                ),
+            ]
+        )
+        session.commit()
+
+    result = service.export_report(sender_email="unsubscribe@example.com")
+    rows = export_rows(result.content)
+    headers = list(rows[0])
+    row_by_tracking_id = {
+        row[headers.index("tracking_id")]: row
+        for row in rows[1:]
+    }
+
+    assert result.row_count == 2
+    assert headers == expected_export_headers()
+    assert headers[-2:] == ["Unsubscribe", "Unsubscribe Time"]
+    assert (
+        row_value(row_by_tracking_id["unsubscribe-export-1"], headers, "Unsubscribe")
+        == 1
+    )
+    assert (
+        row_value(
+            row_by_tracking_id["unsubscribe-export-1"],
+            headers,
+            "Unsubscribe Time",
+        )
+        == expected_first_time
+    )
+    assert (
+        row_value(row_by_tracking_id["unsubscribe-export-0"], headers, "Unsubscribe")
+        == 0
+    )
+    assert (
+        row_value(
+            row_by_tracking_id["unsubscribe-export-0"],
+            headers,
+            "Unsubscribe Time",
+        )
+        is None
+    )
 
 
 def test_export_filtered_by_sender_email() -> None:
@@ -789,7 +880,7 @@ def test_export_empty_database_returns_header_only_workbook() -> None:
 
     assert result.row_count == 0
     assert len(rows) == 1
-    assert list(rows[0]) == DatabaseTrackingService.report_export_columns()
+    assert list(rows[0]) == expected_export_headers()
 
 
 def test_export_large_database_exports_every_matching_record_without_pagination() -> None:

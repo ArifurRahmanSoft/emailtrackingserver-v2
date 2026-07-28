@@ -34,9 +34,14 @@ REPORT_EXPORT_BST_DATETIME_COLUMNS = {
     "last_click",
     "first_download",
     "last_download",
+    "unsubscribe_time",
     "created_at",
     "updated_at",
 }
+REPORT_EXPORT_APPEND_COLUMNS = (
+    ("Unsubscribe", "unsubscribe"),
+    ("Unsubscribe Time", "unsubscribe_time"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,13 +170,24 @@ class ReportingService:
 
         workbook = Workbook(write_only=True)
         worksheet = workbook.create_sheet(title="Report")
-        columns = self._database_service.report_export_columns()
-        worksheet.append(columns)
+        source_columns = self._database_service.report_export_columns()
+        base_columns = [
+            column
+            for column in source_columns
+            if column not in {"unsubscribe", "unsubscribe_time"}
+        ]
+        worksheet.append(
+            base_columns + [label for label, _ in REPORT_EXPORT_APPEND_COLUMNS]
+        )
 
         row_count = 0
         for row in self._database_service.iter_report_export_records(filters):
             worksheet.append(
-                [self._excel_cell(column, row.get(column)) for column in columns]
+                [self._excel_cell(column, row.get(column)) for column in base_columns]
+                + [
+                    self._excel_cell(source_column, row.get(source_column))
+                    for _, source_column in REPORT_EXPORT_APPEND_COLUMNS
+                ]
             )
             row_count += 1
 
