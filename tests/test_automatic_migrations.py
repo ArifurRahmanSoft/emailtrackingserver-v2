@@ -78,6 +78,42 @@ def _create_legacy_email_tracking_table(database_path: Path) -> str:
     return database_url
 
 
+def _create_email_tracking_table_with_boolean_unsubscribe(database_path: Path) -> str:
+    database_url = f"sqlite:///{database_path.as_posix()}"
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE email_tracking (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tracking_id VARCHAR(128) NOT NULL UNIQUE,
+                    recipient_email VARCHAR(320),
+                    sender_email VARCHAR(320),
+                    unsubscribe BOOLEAN,
+                    open_count INTEGER NOT NULL DEFAULT 0,
+                    click_count INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO email_tracking (tracking_id, unsubscribe)
+                VALUES
+                    ('unsubscribe-false', 0),
+                    ('unsubscribe-true', 1),
+                    ('unsubscribe-null', NULL)
+                """
+            )
+        )
+    engine.dispose()
+    return database_url
+
+
 def _isolated_database_path(name: str) -> Path:
     temp_dir = Path(__file__).parent / "_tmp_databases"
     temp_dir.mkdir(exist_ok=True)
@@ -153,8 +189,38 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
     assert row["is_bounce"] == 0
     assert row["bounce_time"] is None
     assert row["bounce_reason"] is None
-    assert row["unsubscribe"] in (False, 0)
+    assert row["unsubscribe"] == 0
     assert row["unsubscribe_time"] is None
+
+
+def test_boolean_unsubscribe_values_are_converted_to_integer_values() -> None:
+    database_url = _create_email_tracking_table_with_boolean_unsubscribe(
+        _isolated_database_path("unsubscribe-boolean")
+    )
+
+    run_pending_migrations(database_url)
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        rows = {
+            row["tracking_id"]: row["unsubscribe"]
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT tracking_id, unsubscribe
+                    FROM email_tracking
+                    ORDER BY tracking_id
+                    """
+                )
+            ).mappings()
+        }
+    engine.dispose()
+
+    assert rows == {
+        "unsubscribe-false": 0,
+        "unsubscribe-null": 0,
+        "unsubscribe-true": 1,
+    }
 
 
 def test_migrations_are_idempotent_for_existing_databases() -> None:
@@ -211,5 +277,5 @@ def test_legacy_tracking_rows_still_work_with_new_nullable_columns() -> None:
     assert record.is_bounce == 0
     assert record.bounce_time is None
     assert record.bounce_reason is None
-    assert record.unsubscribe is False
+    assert record.unsubscribe == 0
     assert record.unsubscribe_time is None

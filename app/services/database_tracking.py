@@ -72,8 +72,8 @@ class UnsubscribeResult:
     tracking_id: str
     recipient_email: str | None
     sender_email: str | None
-    previous_unsubscribe: bool
-    unsubscribe: bool
+    previous_unsubscribe: int
+    unsubscribe: int
     unsubscribe_time: datetime | None
     database_primary_key: int
     commit_success: bool
@@ -257,8 +257,8 @@ class DatabaseTrackingService:
                     )
                     return None
 
-                previous_unsubscribe = bool(record.unsubscribe)
-                if previous_unsubscribe:
+                previous_unsubscribe = 1 if record.unsubscribe == 1 else 0
+                if previous_unsubscribe == 1:
                     logger.info(
                         "Unsubscribe requested for already unsubscribed row: "
                         "tracking_id=%s recipient_email=%s sender_email=%s "
@@ -271,7 +271,7 @@ class DatabaseTrackingService:
                         client_ip,
                         user_agent,
                         previous_unsubscribe,
-                        bool(record.unsubscribe),
+                        record.unsubscribe,
                         (
                             record.unsubscribe_time.isoformat()
                             if record.unsubscribe_time is not None
@@ -283,13 +283,13 @@ class DatabaseTrackingService:
                         recipient_email=record.recipient_email,
                         sender_email=record.sender_email,
                         previous_unsubscribe=previous_unsubscribe,
-                        unsubscribe=bool(record.unsubscribe),
+                        unsubscribe=record.unsubscribe,
                         unsubscribe_time=record.unsubscribe_time,
                         database_primary_key=record.id,
                         commit_success=False,
                     )
 
-                record.unsubscribe = True
+                record.unsubscribe = 1
                 record.unsubscribe_time = timestamp
                 record.updated_at = timestamp
                 session.commit()
@@ -305,7 +305,7 @@ class DatabaseTrackingService:
                     client_ip,
                     user_agent,
                     previous_unsubscribe,
-                    bool(record.unsubscribe),
+                    record.unsubscribe,
                     timestamp.isoformat(),
                 )
                 return UnsubscribeResult(
@@ -313,7 +313,7 @@ class DatabaseTrackingService:
                     recipient_email=record.recipient_email,
                     sender_email=record.sender_email,
                     previous_unsubscribe=previous_unsubscribe,
-                    unsubscribe=bool(record.unsubscribe),
+                    unsubscribe=record.unsubscribe,
                     unsubscribe_time=record.unsubscribe_time,
                     database_primary_key=record.id,
                     commit_success=True,

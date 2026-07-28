@@ -36,7 +36,7 @@ def test_valid_tracking_id_updates_unsubscribe_correctly() -> None:
                 tracking_id=TRACKING_ID,
                 sender_email="sender@example.com",
                 recipient_email="recipient@example.com",
-                unsubscribe=False,
+                unsubscribe=0,
             )
         )
         session.commit()
@@ -57,11 +57,11 @@ def test_valid_tracking_id_updates_unsubscribe_correctly() -> None:
     assert result.tracking_id == TRACKING_ID
     assert result.recipient_email == "recipient@example.com"
     assert result.sender_email == "sender@example.com"
-    assert result.previous_unsubscribe is False
-    assert result.unsubscribe is True
+    assert result.previous_unsubscribe == 0
+    assert result.unsubscribe == 1
     assert result.commit_success is True
     assert record is not None
-    assert record.unsubscribe is True
+    assert record.unsubscribe == 1
     assert record.unsubscribe_time.replace(tzinfo=None) == unsubscribe_time.replace(
         tzinfo=None
     )
@@ -97,7 +97,7 @@ def test_unsubscribe_changes_from_false_to_true_only_once() -> None:
                 tracking_id=TRACKING_ID,
                 sender_email="sender@example.com",
                 recipient_email="recipient@example.com",
-                unsubscribe=False,
+                unsubscribe=0,
             )
         )
         session.commit()
@@ -122,17 +122,17 @@ def test_unsubscribe_changes_from_false_to_true_only_once() -> None:
 
     assert first is not None
     assert second is not None
-    assert first.previous_unsubscribe is False
-    assert first.unsubscribe is True
+    assert first.previous_unsubscribe == 0
+    assert first.unsubscribe == 1
     assert first.commit_success is True
-    assert second.previous_unsubscribe is True
-    assert second.unsubscribe is True
+    assert second.previous_unsubscribe == 1
+    assert second.unsubscribe == 1
     assert second.commit_success is False
     assert second.unsubscribe_time.replace(tzinfo=None) == first_time.replace(
         tzinfo=None
     )
     assert record is not None
-    assert record.unsubscribe is True
+    assert record.unsubscribe == 1
     assert record.unsubscribe_time.replace(tzinfo=None) == first_time.replace(
         tzinfo=None
     )
@@ -157,8 +157,8 @@ def test_unsubscribe_endpoint_returns_success_html(
                 tracking_id=tracking_id,
                 recipient_email="recipient@example.com",
                 sender_email="sender@example.com",
-                previous_unsubscribe=False,
-                unsubscribe=True,
+                previous_unsubscribe=0,
+                unsubscribe=1,
                 unsubscribe_time=occurred_at,
                 database_primary_key=123,
                 commit_success=True,
