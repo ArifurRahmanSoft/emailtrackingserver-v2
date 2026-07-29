@@ -12,6 +12,10 @@ ENV_FILE = PROJECT_ROOT / ".env"
 EXPECTED_DATABASE_NAME = "email_tracking_v2"
 DEFAULT_APPLICATION_NAME = "EmailTrackingServer-V2"
 DEFAULT_ENVIRONMENT = "production"
+DEFAULT_CORS_ALLOWED_ORIGINS = (
+    "http://localhost:4200",
+    "http://127.0.0.1:4200",
+)
 
 
 def _load_env_file() -> None:
@@ -55,6 +59,7 @@ class Settings:
     log_folder: Path
     database_url: str | None
     expected_database_name: str
+    cors_allowed_origins: tuple[str, ...]
 
     @property
     def tracking_file(self) -> Path:
@@ -88,6 +93,7 @@ def load_settings() -> Settings:
         log_folder=PROJECT_ROOT / "logs",
         database_url=database_url,
         expected_database_name=expected_database_name,
+        cors_allowed_origins=_read_cors_allowed_origins(),
     )
 
 
@@ -113,6 +119,28 @@ def _read_database_url(expected_database_name: str) -> str | None:
 
     _validate_v2_database_name(database_url, expected_database_name)
     return database_url
+
+
+def _read_cors_allowed_origins() -> tuple[str, ...]:
+    """Read explicit CORS origins for browser clients without allowing '*'.
+
+    The value supports comma-separated origins and tolerates bracket-wrapped
+    examples such as ``[http://localhost:4200,http://127.0.0.1:4200]``.
+    """
+    raw_origins = os.getenv("CORS_ALLOWED_ORIGINS")
+    if not raw_origins:
+        return DEFAULT_CORS_ALLOWED_ORIGINS
+
+    cleaned = raw_origins.strip().strip("[]")
+    origins: list[str] = []
+    for origin in cleaned.split(","):
+        normalized = origin.strip().strip('"').strip("'")
+        if not normalized or normalized == "*":
+            continue
+        if normalized not in origins:
+            origins.append(normalized)
+
+    return tuple(origins) or DEFAULT_CORS_ALLOWED_ORIGINS
 
 
 def _validate_v2_database_name(

@@ -10,6 +10,7 @@ import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -61,6 +62,10 @@ async def lifespan(_: FastAPI):
         settings.application_name,
         settings.environment,
         settings.public_base_url or "not-configured",
+    )
+    logger.info(
+        "CORS enabled; allowed_origins=%s",
+        ", ".join(settings.cors_allowed_origins),
     )
     yield
     attachment_service.dispose()
@@ -130,6 +135,21 @@ app = FastAPI(
 )
 app.add_middleware(GlobalExceptionMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_allowed_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Accept",
+        "Accept-Language",
+        "Authorization",
+        "Content-Language",
+        "Content-Type",
+        "Origin",
+        "X-Requested-With",
+    ],
+)
 app.include_router(router)
 app.include_router(attachment_router)
 app.include_router(attachment_download_router)

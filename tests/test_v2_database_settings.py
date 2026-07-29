@@ -47,3 +47,40 @@ def test_v2_deployment_identity_comes_from_environment(monkeypatch):
     assert settings.application_name == "EmailTrackingServer-V2"
     assert settings.environment == "production"
     assert settings.public_base_url == "https://example-v2.invalid"
+
+
+def test_cors_origins_default_to_angular_localhost(monkeypatch):
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+
+    settings = load_settings()
+
+    assert settings.cors_allowed_origins == (
+        "http://localhost:4200",
+        "http://127.0.0.1:4200",
+    )
+
+
+def test_cors_origins_support_comma_separated_environment_values(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        "[http://localhost:4200, https://angular-v2.example.com]",
+    )
+
+    settings = load_settings()
+
+    assert settings.cors_allowed_origins == (
+        "http://localhost:4200",
+        "https://angular-v2.example.com",
+    )
+
+
+def test_cors_origins_do_not_allow_wildcard(monkeypatch):
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "*")
+
+    settings = load_settings()
+
+    assert "*" not in settings.cors_allowed_origins
+    assert settings.cors_allowed_origins == (
+        "http://localhost:4200",
+        "http://127.0.0.1:4200",
+    )
