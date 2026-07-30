@@ -17,6 +17,8 @@ class ReportFilters:
     is_open: bool = False
     is_click: bool = False
     is_download: bool = False
+    created_at_from_utc: datetime | None = None
+    created_at_to_utc: datetime | None = None
 
 
 class ReportItem(BaseModel):

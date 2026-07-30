@@ -951,6 +951,10 @@ class DatabaseTrackingService:
             conditions.append(func.coalesce(EmailTracking.click_count, 0) > 0)
         if filters.is_download:
             conditions.append(func.coalesce(EmailTracking.download_count, 0) > 0)
+        if filters.created_at_from_utc is not None:
+            conditions.append(EmailTracking.created_at >= filters.created_at_from_utc)
+        if filters.created_at_to_utc is not None:
+            conditions.append(EmailTracking.created_at <= filters.created_at_to_utc)
         return conditions
 
     def mark_synchronized(

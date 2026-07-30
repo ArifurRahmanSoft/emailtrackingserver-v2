@@ -41,7 +41,7 @@ from app.services.database_tracking import (
 )
 from app.services.dashboard_statistics import DashboardStatisticsService
 from app.services.excel_tracking import ExcelTrackingService
-from app.services.reporting import ReportingService
+from app.services.reporting import ReportFilterValidationError, ReportingService
 from app.services.tracking_debug import TrackingDebugService
 from app.services.tracking_pixel import get_transparent_pixel
 from app.utils.url_validation import is_valid_http_url
@@ -754,19 +754,30 @@ async def get_report(
     is_open: bool = Query(default=False, description="Only opened rows."),
     is_click: bool = Query(default=False, description="Only clicked rows."),
     is_download: bool = Query(default=False, description="Only downloaded rows."),
+    from_date: str | None = Query(
+        default=None,
+        description="Bangladesh sent date filter start in YYYY-MM-DD format.",
+    ),
+    to_date: str | None = Query(
+        default=None,
+        description="Bangladesh sent date filter end in YYYY-MM-DD format.",
+    ),
 ) -> ReportResponse:
     """Return tracking rows using server-side pagination."""
     started_at = time.perf_counter()
-    filters = ReportingService.build_filters(
-        sender_email=sender_email,
-        project_name=project_name,
-        is_reply=is_reply,
-        is_bounce=is_bounce,
-        is_open=is_open,
-        is_click=is_click,
-        is_download=is_download,
-    )
+    filters = None
     try:
+        filters = ReportingService.build_filters(
+            sender_email=sender_email,
+            project_name=project_name,
+            is_reply=is_reply,
+            is_bounce=is_bounce,
+            is_open=is_open,
+            is_click=is_click,
+            is_download=is_download,
+            from_date=from_date,
+            to_date=to_date,
+        )
         result = await run_in_threadpool(
             reporting_service.get_report,
             page,
@@ -778,7 +789,23 @@ async def get_report(
             is_open,
             is_click,
             is_download,
+            from_date,
+            to_date,
         )
+    except ReportFilterValidationError as exc:
+        logger.warning(
+            "Report request rejected: RequestedPage=%s RequestedPageSize=%s "
+            "from_date=%s to_date=%s Error=%s",
+            page,
+            page_size,
+            from_date,
+            to_date,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.error(
             "Report request failed: RequestedPage=%s RequestedPageSize=%s "
@@ -856,20 +883,31 @@ async def export_report(
     is_open: bool = Query(default=False, description="Only opened rows."),
     is_click: bool = Query(default=False, description="Only clicked rows."),
     is_download: bool = Query(default=False, description="Only downloaded rows."),
+    from_date: str | None = Query(
+        default=None,
+        description="Bangladesh sent date filter start in YYYY-MM-DD format.",
+    ),
+    to_date: str | None = Query(
+        default=None,
+        description="Bangladesh sent date filter end in YYYY-MM-DD format.",
+    ),
 ) -> StreamingResponse:
     """Export every matching report row to an Excel workbook."""
     started_at = time.perf_counter()
-    filters = ReportingService.build_filters(
-        sender_email=sender_email,
-        project_name=project_name,
-        is_reply=is_reply,
-        is_bounce=is_bounce,
-        is_open=is_open,
-        is_click=is_click,
-        is_download=is_download,
-    )
-    logger.info("Report export started: AppliedFilters=%s", filters)
+    filters = None
     try:
+        filters = ReportingService.build_filters(
+            sender_email=sender_email,
+            project_name=project_name,
+            is_reply=is_reply,
+            is_bounce=is_bounce,
+            is_open=is_open,
+            is_click=is_click,
+            is_download=is_download,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        logger.info("Report export started: AppliedFilters=%s", filters)
         result = await run_in_threadpool(
             reporting_service.export_report,
             sender_email,
@@ -879,7 +917,20 @@ async def export_report(
             is_open,
             is_click,
             is_download,
+            from_date,
+            to_date,
         )
+    except ReportFilterValidationError as exc:
+        logger.warning(
+            "Report export rejected: from_date=%s to_date=%s Error=%s",
+            from_date,
+            to_date,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.error(
             "Report export failed: AppliedFilters=%s Error=%s",

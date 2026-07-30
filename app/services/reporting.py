@@ -1,9 +1,10 @@
 """Paginated reporting service for tracking rows."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from io import BytesIO
 from math import ceil
+import re
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
@@ -19,6 +20,7 @@ from app.services.database_tracking import DatabaseTrackingService
 DEFAULT_PAGE = 1
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+REPORT_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REPORT_RESPONSE_TIMEZONE = ZoneInfo("Asia/Dhaka")
 REPORT_EXPORT_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -54,6 +56,10 @@ class ReportExportResult:
     content_type: str = REPORT_EXPORT_CONTENT_TYPE
 
 
+class ReportFilterValidationError(ValueError):
+    """Raised when report query filters cannot be validated."""
+
+
 class ReportingService:
     """Build paginated report responses from PostgreSQL."""
 
@@ -71,6 +77,8 @@ class ReportingService:
         is_open: bool = False,
         is_click: bool = False,
         is_download: bool = False,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> ReportResponse:
         """Return one report page using server-side pagination."""
         normalized_page = page if page >= 1 else DEFAULT_PAGE
@@ -87,6 +95,8 @@ class ReportingService:
             is_open=is_open,
             is_click=is_click,
             is_download=is_download,
+            from_date=from_date,
+            to_date=to_date,
         )
 
         total_records = self._database_service.count_report_records(filters)
@@ -118,10 +128,18 @@ class ReportingService:
         is_open: bool = False,
         is_click: bool = False,
         is_download: bool = False,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> ReportFilters:
         """Normalize optional filter values while treating empty strings as absent."""
         clean_sender = sender_email.strip() if sender_email else None
         clean_project = project_name.strip() if project_name else None
+        created_at_from_utc, created_at_to_utc = (
+            ReportingService._bangladesh_date_filter_to_utc_range(
+                from_date=from_date,
+                to_date=to_date,
+            )
+        )
         return ReportFilters(
             sender_email=clean_sender or None,
             project_name=clean_project or None,
@@ -130,7 +148,70 @@ class ReportingService:
             is_open=bool(is_open),
             is_click=bool(is_click),
             is_download=bool(is_download),
+            created_at_from_utc=created_at_from_utc,
+            created_at_to_utc=created_at_to_utc,
         )
+
+    @staticmethod
+    def _bangladesh_date_filter_to_utc_range(
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> tuple[datetime | None, datetime | None]:
+        """Convert Bangladesh calendar date filters into UTC datetime bounds."""
+        clean_from = from_date.strip() if from_date else None
+        clean_to = to_date.strip() if to_date else None
+        if not clean_from and not clean_to:
+            return None, None
+
+        start_date = (
+            ReportingService._parse_report_date(clean_from, "from_date")
+            if clean_from
+            else None
+        )
+        end_date = (
+            ReportingService._parse_report_date(clean_to, "to_date")
+            if clean_to
+            else None
+        )
+        if start_date is None:
+            start_date = end_date
+        if end_date is None:
+            end_date = start_date
+        if start_date is None or end_date is None:
+            return None, None
+        if end_date < start_date:
+            raise ReportFilterValidationError(
+                "to_date must be greater than or equal to from_date."
+            )
+
+        local_start = datetime.combine(
+            start_date,
+            time.min,
+            tzinfo=REPORT_RESPONSE_TIMEZONE,
+        )
+        local_end = datetime.combine(
+            end_date,
+            time.max,
+            tzinfo=REPORT_RESPONSE_TIMEZONE,
+        )
+        return (
+            local_start.astimezone(timezone.utc),
+            local_end.astimezone(timezone.utc),
+        )
+
+    @staticmethod
+    def _parse_report_date(value: str | None, field_name: str) -> date:
+        """Parse strict YYYY-MM-DD report dates."""
+        if value is None or not REPORT_DATE_PATTERN.fullmatch(value):
+            raise ReportFilterValidationError(
+                f"{field_name} must use YYYY-MM-DD format."
+            )
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ReportFilterValidationError(
+                f"{field_name} must be a valid calendar date."
+            ) from exc
 
     def get_filter_options(self) -> ReportFilterOptionsResponse:
         """Return distinct report filter dropdown options."""
@@ -149,6 +230,8 @@ class ReportingService:
         is_open: bool = False,
         is_click: bool = False,
         is_download: bool = False,
+        from_date: str | None = None,
+        to_date: str | None = None,
         generated_at: datetime | None = None,
     ) -> ReportExportResult:
         """Generate an Excel export for every filtered report row."""
@@ -166,6 +249,8 @@ class ReportingService:
             is_open=is_open,
             is_click=is_click,
             is_download=is_download,
+            from_date=from_date,
+            to_date=to_date,
         )
 
         workbook = Workbook(write_only=True)

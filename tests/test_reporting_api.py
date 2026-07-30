@@ -120,6 +120,51 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
         session.commit()
 
 
+def seed_date_filter_records(session_factory: sessionmaker) -> None:
+    """Seed records around Bangladesh calendar-day UTC boundaries."""
+    rows = [
+        EmailTracking(
+            tracking_id="bd-2026-04-26-before",
+            sender_email="date@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 26, 17, 59, 59, tzinfo=timezone.utc),
+        ),
+        EmailTracking(
+            tracking_id="bd-2026-04-27-start",
+            sender_email="date@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 26, 18, 0, tzinfo=timezone.utc),
+        ),
+        EmailTracking(
+            tracking_id="bd-2026-04-27-middle",
+            sender_email="date@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 27, 12, 0, tzinfo=timezone.utc),
+        ),
+        EmailTracking(
+            tracking_id="bd-2026-04-28-other-sender",
+            sender_email="other@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 28, 6, 0, tzinfo=timezone.utc),
+        ),
+        EmailTracking(
+            tracking_id="bd-2026-04-29-end",
+            sender_email="date@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 29, 17, 59, 59, tzinfo=timezone.utc),
+        ),
+        EmailTracking(
+            tracking_id="bd-2026-04-30-after",
+            sender_email="date@example.com",
+            project_name="Date Project",
+            created_at=datetime(2026, 4, 29, 18, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    with session_factory() as session:
+        session.add_all(rows)
+        session.commit()
+
+
 def export_rows(content: bytes) -> list[tuple[object, ...]]:
     """Return worksheet rows from an exported report workbook."""
     workbook = load_workbook(BytesIO(content), read_only=True)
@@ -450,6 +495,66 @@ def test_pagination_is_applied_after_filtering() -> None:
     assert result.items[0].tracking_id == "report-016"
 
 
+def test_from_date_filters_one_bangladesh_calendar_day() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_date_filter_records(session_factory)
+
+    result = service.get_report(from_date="2026-04-27")
+
+    assert result.total_records == 2
+    assert [item.tracking_id for item in result.items] == [
+        "bd-2026-04-27-middle",
+        "bd-2026-04-27-start",
+    ]
+
+    with session_factory() as session:
+        stored_created_at = (
+            session.query(EmailTracking.created_at)
+            .filter(EmailTracking.tracking_id == "bd-2026-04-27-start")
+            .scalar()
+        )
+    assert stored_created_at.replace(tzinfo=timezone.utc) == datetime(
+        2026,
+        4,
+        26,
+        18,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+
+def test_from_date_and_to_date_filter_inclusive_bangladesh_date_range() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_date_filter_records(session_factory)
+
+    result = service.get_report(from_date="2026-04-25", to_date="2026-04-29")
+
+    assert result.total_records == 5
+    assert [item.tracking_id for item in result.items] == [
+        "bd-2026-04-29-end",
+        "bd-2026-04-28-other-sender",
+        "bd-2026-04-27-middle",
+        "bd-2026-04-27-start",
+        "bd-2026-04-26-before",
+    ]
+
+
+def test_date_filter_works_with_existing_sender_filter() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_date_filter_records(session_factory)
+
+    result = service.get_report(
+        sender_email="date@example.com",
+        from_date="2026-04-25",
+        to_date="2026-04-29",
+    )
+
+    assert result.total_records == 4
+    assert "bd-2026-04-28-other-sender" not in {
+        item.tracking_id for item in result.items
+    }
+
+
 def test_report_endpoint_returns_paginated_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -465,6 +570,8 @@ def test_report_endpoint_returns_paginated_response(
             is_open: bool = False,
             is_click: bool = False,
             is_download: bool = False,
+            from_date: str | None = None,
+            to_date: str | None = None,
         ) -> ReportResponse:
             assert page == 2
             assert page_size == 5
@@ -475,6 +582,8 @@ def test_report_endpoint_returns_paginated_response(
             assert is_open is False
             assert is_click is False
             assert is_download is False
+            assert from_date == "2026-04-27"
+            assert to_date is None
             return ReportResponse(
                 page=2,
                 page_size=5,
@@ -510,6 +619,7 @@ def test_report_endpoint_returns_paginated_response(
             "page_size": 5,
             "sender_email": "sender@example.com",
             "is_reply": "true",
+            "from_date": "2026-04-27",
         },
     )
 
@@ -518,6 +628,25 @@ def test_report_endpoint_returns_paginated_response(
     assert response.json()["page_size"] == 5
     assert response.json()["total_records"] == 6
     assert response.json()["items"][0]["tracking_id"] == "endpoint-row"
+
+
+def test_report_endpoint_returns_http_400_for_invalid_from_date() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/report", params={"from_date": "2026/04/27"})
+
+    assert response.status_code == 400
+
+
+def test_report_endpoint_returns_http_400_when_to_date_is_before_from_date() -> None:
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/report",
+        params={"from_date": "2026-04-29", "to_date": "2026-04-25"},
+    )
+
+    assert response.status_code == 400
 
 
 def test_filter_options_normal_database_excludes_duplicates_and_blank_values() -> None:
@@ -872,6 +1001,28 @@ def test_export_filtered_by_multiple_filters() -> None:
     assert rows[1][tracking_id_index] == "alpha-click-download-bounce"
 
 
+def test_export_uses_same_bangladesh_date_filtering_without_pagination() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_date_filter_records(session_factory)
+
+    result = service.export_report(
+        sender_email="date@example.com",
+        from_date="2026-04-25",
+        to_date="2026-04-29",
+    )
+    rows = export_rows(result.content)
+    headers = list(rows[0])
+    tracking_id_index = headers.index("tracking_id")
+
+    assert result.row_count == 4
+    assert [row[tracking_id_index] for row in rows[1:]] == [
+        "bd-2026-04-29-end",
+        "bd-2026-04-27-middle",
+        "bd-2026-04-27-start",
+        "bd-2026-04-26-before",
+    ]
+
+
 def test_export_empty_database_returns_header_only_workbook() -> None:
     service, _, _ = build_reporting_service()
 
@@ -926,6 +1077,8 @@ def test_export_endpoint_returns_xlsx_attachment(
             is_open: bool = False,
             is_click: bool = False,
             is_download: bool = False,
+            from_date: str | None = None,
+            to_date: str | None = None,
         ) -> ReportExportResult:
             assert sender_email == "alpha@example.com"
             assert project_name is None
@@ -934,12 +1087,16 @@ def test_export_endpoint_returns_xlsx_attachment(
             assert is_open is False
             assert is_click is False
             assert is_download is False
+            assert from_date == "2026-04-27"
+            assert to_date is None
 
             service, session_factory, _ = build_reporting_service()
             seed_filter_records(session_factory)
             return service.export_report(
                 sender_email=sender_email,
                 is_reply=is_reply,
+                from_date=from_date,
+                to_date=to_date,
                 generated_at=datetime(2026, 7, 20, 10, 30, tzinfo=timezone.utc),
             )
 
@@ -948,7 +1105,11 @@ def test_export_endpoint_returns_xlsx_attachment(
 
     response = client.get(
         "/api/report/export",
-        params={"sender_email": "alpha@example.com", "is_reply": "true"},
+        params={
+            "sender_email": "alpha@example.com",
+            "is_reply": "true",
+            "from_date": "2026-04-27",
+        },
     )
 
     assert response.status_code == 200
@@ -958,3 +1119,11 @@ def test_export_endpoint_returns_xlsx_attachment(
         == 'attachment; filename="Report_20260720_103000.xlsx"'
     )
     workbook(BytesIO(response.content), read_only=True)
+
+
+def test_export_endpoint_returns_http_400_for_invalid_to_date() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/report/export", params={"to_date": "2026-02-31"})
+
+    assert response.status_code == 400
