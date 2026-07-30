@@ -42,7 +42,7 @@ All Python dependencies are pinned in `requirements.txt`. Render selects Python
 | `PUBLIC_BASE_URL` | After deployment | Actual V2 public URL assigned/configured in Render; no URL is hardcoded in source |
 | `DATABASE_URL` | Yes on Render | Version 2 PostgreSQL connection string; must point to `email_tracking_v2` |
 | `EXPECTED_DATABASE_NAME` | Recommended | Database-name safety check; defaults to `email_tracking_v2` |
-| `CORS_ALLOWED_ORIGINS` | No | Comma-separated Angular/browser origins; defaults to `http://localhost:4200,http://127.0.0.1:4200` |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated Angular/browser origins; defaults to `http://localhost:4200,http://127.0.0.1:4200,https://emailautomationreporting.netlify.app` |
 | `PORT` | Yes on Render | Port exposed by the web service |
 | `LOG_LEVEL` | No | Logging level; defaults to `INFO` |
 | `DATA_FOLDER` | No | Excel folder; defaults locally to `data/` |
@@ -73,7 +73,7 @@ $env:LOG_LEVEL = "INFO"
 $env:DATA_FOLDER = "data"
 $env:APP_NAME = "EmailTrackingServer-V2"
 $env:APP_ENV = "development"
-$env:CORS_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
+$env:CORS_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200,https://emailautomationreporting.netlify.app"
 $env:PUBLIC_BASE_URL = ""
 $env:EXPECTED_DATABASE_NAME = "email_tracking_v2"
 $env:DATABASE_URL = "<VERSION_2_POSTGRESQL_DATABASE_URL_FOR_email_tracking_v2>"

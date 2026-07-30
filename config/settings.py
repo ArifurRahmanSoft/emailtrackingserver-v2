@@ -15,6 +15,7 @@ DEFAULT_ENVIRONMENT = "production"
 DEFAULT_CORS_ALLOWED_ORIGINS = (
     "http://localhost:4200",
     "http://127.0.0.1:4200",
+    "https://emailautomationreporting.netlify.app",
 )
 
 
@@ -125,7 +126,7 @@ def _read_cors_allowed_origins() -> tuple[str, ...]:
     """Read explicit CORS origins for browser clients without allowing '*'.
 
     The value supports comma-separated origins and tolerates bracket-wrapped
-    examples such as ``[http://localhost:4200,http://127.0.0.1:4200]``.
+    examples such as ``[http://localhost:4200,http://127.0.0.1:4200,https://emailautomationreporting.netlify.app]``.
     """
     raw_origins = os.getenv("CORS_ALLOWED_ORIGINS")
     if not raw_origins:

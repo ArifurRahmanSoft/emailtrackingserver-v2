@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from main import app
 
 
-ANGULAR_ORIGIN = "http://localhost:4200"
+ANGULAR_ORIGIN = "http://localhost:4200,https://emailautomationreporting.netlify.app"
 
 
 @pytest.mark.parametrize(
