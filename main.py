@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from app.api.auth_routes import auth_service, router as auth_router
 from app.api.attachment_routes import attachment_service, router as attachment_router
 from app.api.attachment_download_routes import router as attachment_download_router
 from app.api.attachment_mapping_routes import router as attachment_mapping_router
@@ -57,6 +58,11 @@ async def lifespan(_: FastAPI):
         logger.info("Attachment Library storage and database table ready")
     except Exception as exc:
         logger.error("Attachment Library initialization failed: %s", exc, exc_info=True)
+    try:
+        auth_service.initialize()
+        logger.info("Authentication system_users table ready")
+    except Exception as exc:
+        logger.error("Authentication initialization failed: %s", exc, exc_info=True)
     logger.info(
         "%s started; environment=%s public_base_url=%s",
         settings.application_name,
@@ -68,6 +74,7 @@ async def lifespan(_: FastAPI):
         ", ".join(settings.cors_allowed_origins),
     )
     yield
+    auth_service.dispose()
     attachment_service.dispose()
     database_service.dispose()
     logger.info("%s stopped", settings.application_name)
@@ -154,6 +161,7 @@ app.include_router(router)
 app.include_router(attachment_router)
 app.include_router(attachment_download_router)
 app.include_router(attachment_mapping_router)
+app.include_router(auth_router)
 
 
 @app.exception_handler(StarletteHTTPException)

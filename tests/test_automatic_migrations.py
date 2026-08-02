@@ -155,6 +155,12 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("email_tracking")}
     indexes = {index["name"] for index in inspector.get_indexes("email_tracking")}
+    system_user_columns = {
+        column["name"] for column in inspector.get_columns("system_users")
+    }
+    system_user_indexes = {
+        index["name"] for index in inspector.get_indexes("system_users")
+    }
     with engine.connect() as connection:
         row = connection.execute(
             text(
@@ -180,6 +186,17 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
 
     assert REQUIRED_V2_COLUMNS.issubset(columns)
     assert "ix_email_tracking_message_id" in indexes
+    assert {
+        "id",
+        "user_id",
+        "password",
+        "role",
+        "register_date",
+        "created_at",
+        "updated_at",
+    }.issubset(system_user_columns)
+    assert "ix_system_users_user_id" in system_user_indexes
+    assert "ix_system_users_role" in system_user_indexes
     assert row["download_count"] == 0
     assert row["first_download"] is None
     assert row["last_download"] is None
