@@ -2,6 +2,7 @@
 
 import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 from starlette.concurrency import run_in_threadpool
@@ -9,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 from app.models.auth_api import (
     AuthLoginRequest,
     AuthRegisterRequest,
+    AuthUpdateUserRequest,
+    AuthUpdateUserResponse,
+    AuthUserListItem,
     AuthUserResponse,
 )
 from app.services.auth import (
@@ -16,6 +20,7 @@ from app.services.auth import (
     AuthService,
     DuplicateSystemUserError,
     InvalidCredentialsError,
+    SystemUserNotFoundError,
 )
 from config.settings import load_settings
 
@@ -93,6 +98,147 @@ async def register_user(
         user_id=result.user_id,
         role=result.role,
         register_date=result.register_date,
+    )
+
+
+@router.get(
+    "/users",
+    response_model=list[AuthUserListItem],
+    summary="List registered system users",
+)
+async def list_users(request: Request) -> list[AuthUserListItem]:
+    """Return all registered users without password data."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+
+    try:
+        users = await run_in_threadpool(auth_service.list_users)
+    except AuthDatabaseUnavailableError as exc:
+        logger.error(
+            "System user list failed: client_ip=%s user_agent=%s request_time=%s "
+            "error=%s",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "System user list requested: client_ip=%s user_agent=%s "
+        "returned_record_count=%d request_time=%s",
+        client_ip,
+        user_agent,
+        len(users),
+        request_time.isoformat(),
+    )
+    return [
+        AuthUserListItem(
+            id=user.id,
+            user_id=user.user_id,
+            role=user.role,
+            register_date=user.register_date,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        )
+        for user in users
+    ]
+
+
+@router.put(
+    "/users/{id}",
+    response_model=AuthUpdateUserResponse,
+    summary="Update a registered system user",
+)
+async def update_user(
+    id: UUID,
+    payload: AuthUpdateUserRequest,
+    request: Request,
+) -> AuthUpdateUserResponse:
+    """Update one registered user without returning password data."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    update_time = datetime.now(timezone.utc)
+
+    try:
+        result = await run_in_threadpool(
+            auth_service.update_user,
+            id,
+            payload.user_id,
+            payload.password,
+            payload.role,
+            update_time,
+        )
+    except SystemUserNotFoundError as exc:
+        logger.warning(
+            "System user update rejected: database_primary_key=%s client_ip=%s "
+            "user_agent=%s update_time=%s reason=not_found",
+            id,
+            client_ip,
+            user_agent,
+            update_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        ) from exc
+    except DuplicateSystemUserError as exc:
+        logger.warning(
+            "System user update rejected: database_primary_key=%s user_id_after=%s "
+            "role_after=%s client_ip=%s user_agent=%s update_time=%s "
+            "reason=duplicate_user_id",
+            id,
+            payload.user_id,
+            payload.role,
+            client_ip,
+            user_agent,
+            update_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="user_id already exists.",
+        ) from exc
+    except AuthDatabaseUnavailableError as exc:
+        logger.error(
+            "System user update failed: database_primary_key=%s client_ip=%s "
+            "user_agent=%s update_time=%s error=%s",
+            id,
+            client_ip,
+            user_agent,
+            update_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "System user updated: database_primary_key=%s user_id_before=%s "
+        "user_id_after=%s role_before=%s role_after=%s client_ip=%s "
+        "user_agent=%s update_time=%s",
+        result.id,
+        result.user_id_before_update,
+        result.user_id,
+        result.role_before_update,
+        result.role,
+        client_ip,
+        user_agent,
+        result.updated_at.isoformat(),
+    )
+    return AuthUpdateUserResponse(
+        success=True,
+        id=result.id,
+        user_id=result.user_id,
+        role=result.role,
+        register_date=result.register_date,
+        updated_at=result.updated_at,
     )
 
 

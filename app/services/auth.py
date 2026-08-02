@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+from uuid import UUID
 
 from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -28,6 +29,10 @@ class InvalidCredentialsError(AuthServiceError):
     """Raised when login credentials do not match a stored user."""
 
 
+class SystemUserNotFoundError(AuthServiceError):
+    """Raised when a requested system user UUID does not exist."""
+
+
 @dataclass(frozen=True, slots=True)
 class AuthUserResult:
     """Authentication user data returned by register/login operations."""
@@ -35,6 +40,32 @@ class AuthUserResult:
     user_id: str
     role: str
     register_date: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AuthUserListResult:
+    """Non-sensitive user data returned by the list API."""
+
+    id: UUID
+    user_id: str
+    role: str
+    register_date: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AuthUserUpdateResult:
+    """Non-sensitive user data returned after an update."""
+
+    id: UUID
+    user_id: str
+    role: str
+    register_date: datetime
+    updated_at: datetime
+    user_id_before_update: str
+    role_before_update: str
+    created_at_before_update: datetime
 
 
 class AuthService:
@@ -140,6 +171,90 @@ class AuthService:
         except Exception as exc:
             raise AuthDatabaseUnavailableError(
                 f"Unable to authenticate system user: {exc}"
+            ) from exc
+
+    def list_users(self) -> list[AuthUserListResult]:
+        """Return all system users newest-first without password data."""
+        session_factory = self._require_session_factory()
+
+        try:
+            with session_factory() as session:
+                users = session.scalars(
+                    select(SystemUser).order_by(SystemUser.register_date.desc())
+                ).all()
+                return [
+                    AuthUserListResult(
+                        id=user.id,
+                        user_id=user.user_id,
+                        role=user.role,
+                        register_date=user.register_date,
+                        created_at=user.created_at,
+                        updated_at=user.updated_at,
+                    )
+                    for user in users
+                ]
+        except Exception as exc:
+            raise AuthDatabaseUnavailableError(
+                f"Unable to list system users: {exc}"
+            ) from exc
+
+    def update_user(
+        self,
+        user_uuid: UUID,
+        user_id: str,
+        password: str,
+        role: str,
+        updated_at: datetime | None = None,
+    ) -> AuthUserUpdateResult:
+        """Update one system user while preserving register_date and created_at."""
+        session_factory = self._require_session_factory()
+        clean_user_id = user_id.strip()
+        clean_password = password.strip()
+        clean_role = role.strip()
+        timestamp = self._as_utc(updated_at or datetime.now(timezone.utc))
+
+        try:
+            with session_factory() as session:
+                user = session.get(SystemUser, user_uuid)
+                if user is None:
+                    raise SystemUserNotFoundError(f"user id '{user_uuid}' not found.")
+
+                duplicate = session.scalar(
+                    select(SystemUser.id).where(
+                        SystemUser.user_id == clean_user_id,
+                        SystemUser.id != user_uuid,
+                    )
+                )
+                if duplicate is not None:
+                    raise DuplicateSystemUserError(
+                        f"user_id '{clean_user_id}' already exists."
+                    )
+
+                user_id_before_update = user.user_id
+                role_before_update = user.role
+                created_at_before_update = user.created_at
+
+                user.user_id = clean_user_id
+                user.password = clean_password
+                user.role = clean_role
+                user.updated_at = timestamp
+                session.commit()
+
+                return AuthUserUpdateResult(
+                    id=user.id,
+                    user_id=user.user_id,
+                    role=user.role,
+                    register_date=user.register_date,
+                    updated_at=user.updated_at,
+                    user_id_before_update=user_id_before_update,
+                    role_before_update=role_before_update,
+                    created_at_before_update=created_at_before_update,
+                )
+        except (DuplicateSystemUserError, SystemUserNotFoundError):
+            raise
+        except Exception as exc:
+            raise AuthDatabaseUnavailableError(
+                f"Unable to update system user: {exc}"
             ) from exc
 
     @staticmethod

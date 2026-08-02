@@ -1,6 +1,7 @@
 """Tests for Version 2 simple authentication infrastructure."""
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,9 +12,12 @@ import app.api.auth_routes as auth_route_module
 from app.models.auth import AuthBase, SystemUser
 from app.services.auth import (
     AuthService,
+    AuthUserListResult,
     AuthUserResult,
+    AuthUserUpdateResult,
     DuplicateSystemUserError,
     InvalidCredentialsError,
+    SystemUserNotFoundError,
 )
 from main import app
 
@@ -111,6 +115,80 @@ def test_login_invalid_password_raises_invalid_credentials() -> None:
         service.login_user("admin", "wrong")
 
 
+def test_list_users_returns_all_users_newest_first_without_password() -> None:
+    service, _ = build_auth_service()
+    old_time = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc)
+    new_time = datetime(2026, 8, 2, 9, 30, tzinfo=timezone.utc)
+    service.register_user("old_user", "oldpass", "USER", old_time)
+    service.register_user("new_user", "newpass", "ADMIN", new_time)
+
+    users = service.list_users()
+
+    assert [user.user_id for user in users] == ["new_user", "old_user"]
+    assert all(not hasattr(user, "password") for user in users)
+
+
+def test_update_user_succeeds_and_preserves_original_dates() -> None:
+    service, session_factory = build_auth_service()
+    register_time = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc)
+    update_time = datetime(2026, 8, 2, 10, 45, tzinfo=timezone.utc)
+    service.register_user("admin", "123456", "ADMIN", register_time)
+
+    with session_factory() as session:
+        user = session.scalar(select(SystemUser).where(SystemUser.user_id == "admin"))
+        assert user is not None
+        user_uuid = user.id
+        original_register_date = user.register_date
+        original_created_at = user.created_at
+
+    result = service.update_user(
+        user_uuid=user_uuid,
+        user_id="manager",
+        password="abcdef",
+        role="MANAGER",
+        updated_at=update_time,
+    )
+
+    with session_factory() as session:
+        updated_user = session.get(SystemUser, user_uuid)
+
+    assert result.id == user_uuid
+    assert result.user_id == "manager"
+    assert result.role == "MANAGER"
+    assert result.register_date == original_register_date
+    assert result.updated_at.replace(tzinfo=None) == update_time.replace(tzinfo=None)
+    assert not hasattr(result, "password")
+    assert updated_user is not None
+    assert updated_user.password == "abcdef"
+    assert updated_user.register_date == original_register_date
+    assert updated_user.created_at == original_created_at
+    assert updated_user.updated_at.replace(tzinfo=None) == update_time.replace(
+        tzinfo=None
+    )
+
+
+def test_update_user_duplicate_user_id_raises_conflict_error() -> None:
+    service, session_factory = build_auth_service()
+    service.register_user("admin", "123456", "ADMIN")
+    service.register_user("manager", "abcdef", "MANAGER")
+
+    with session_factory() as session:
+        manager = session.scalar(
+            select(SystemUser).where(SystemUser.user_id == "manager")
+        )
+        assert manager is not None
+
+    with pytest.raises(DuplicateSystemUserError):
+        service.update_user(manager.id, "admin", "newpass", "MANAGER")
+
+
+def test_update_user_unknown_uuid_raises_not_found() -> None:
+    service, _ = build_auth_service()
+
+    with pytest.raises(SystemUserNotFoundError):
+        service.update_user(uuid4(), "admin", "123456", "ADMIN")
+
+
 def test_register_endpoint_returns_success_without_password(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,6 +250,146 @@ def test_register_endpoint_duplicate_user_id_returns_http_409(
     )
 
     assert response.status_code == 409
+
+
+def test_get_users_endpoint_returns_password_free_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    newest_time = datetime(2026, 8, 2, 9, 30, tzinfo=timezone.utc)
+    older_time = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc)
+    newest_id = uuid4()
+    older_id = uuid4()
+
+    class FakeAuthService:
+        def list_users(self) -> list[AuthUserListResult]:
+            return [
+                AuthUserListResult(
+                    id=newest_id,
+                    user_id="new_user",
+                    role="ADMIN",
+                    register_date=newest_time,
+                    created_at=newest_time,
+                    updated_at=newest_time,
+                ),
+                AuthUserListResult(
+                    id=older_id,
+                    user_id="old_user",
+                    role="USER",
+                    register_date=older_time,
+                    created_at=older_time,
+                    updated_at=older_time,
+                ),
+            ]
+
+    monkeypatch.setattr(auth_route_module, "auth_service", FakeAuthService())
+    client = TestClient(app)
+
+    response = client.get("/api/auth/users")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [user["user_id"] for user in payload] == ["new_user", "old_user"]
+    assert all("password" not in user for user in payload)
+    assert payload[0]["id"] == str(newest_id)
+
+
+def test_update_user_endpoint_returns_success_without_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_uuid = uuid4()
+    register_time = datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc)
+    update_time = datetime(2026, 8, 2, 10, 45, tzinfo=timezone.utc)
+
+    class FakeAuthService:
+        def update_user(
+            self,
+            user_uuid_arg,
+            user_id: str,
+            password: str,
+            role: str,
+            updated_at: datetime | None = None,
+        ) -> AuthUserUpdateResult:
+            assert user_uuid_arg == user_uuid
+            assert user_id == "manager"
+            assert password == "abcdef"
+            assert role == "MANAGER"
+            assert updated_at is not None
+            return AuthUserUpdateResult(
+                id=user_uuid,
+                user_id=user_id,
+                role=role,
+                register_date=register_time,
+                updated_at=update_time,
+                user_id_before_update="admin",
+                role_before_update="ADMIN",
+                created_at_before_update=register_time,
+            )
+
+    monkeypatch.setattr(auth_route_module, "auth_service", FakeAuthService())
+    client = TestClient(app)
+
+    response = client.put(
+        f"/api/auth/users/{user_uuid}",
+        json={"user_id": "manager", "password": "abcdef", "role": "MANAGER"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["id"] == str(user_uuid)
+    assert payload["user_id"] == "manager"
+    assert payload["role"] == "MANAGER"
+    assert "password" not in payload
+
+
+def test_update_user_endpoint_duplicate_user_id_returns_http_409(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAuthService:
+        def update_user(
+            self,
+            user_uuid,
+            user_id: str,
+            password: str,
+            role: str,
+            updated_at: datetime | None = None,
+        ) -> AuthUserUpdateResult:
+            raise DuplicateSystemUserError("duplicate")
+
+    monkeypatch.setattr(auth_route_module, "auth_service", FakeAuthService())
+    client = TestClient(app)
+
+    response = client.put(
+        f"/api/auth/users/{uuid4()}",
+        json={"user_id": "admin", "password": "123456", "role": "ADMIN"},
+    )
+
+    assert response.status_code == 409
+
+
+def test_update_user_endpoint_unknown_uuid_returns_http_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAuthService:
+        def update_user(
+            self,
+            user_uuid,
+            user_id: str,
+            password: str,
+            role: str,
+            updated_at: datetime | None = None,
+        ) -> AuthUserUpdateResult:
+            raise SystemUserNotFoundError("missing")
+
+    monkeypatch.setattr(auth_route_module, "auth_service", FakeAuthService())
+    client = TestClient(app)
+
+    response = client.put(
+        f"/api/auth/users/{uuid4()}",
+        json={"user_id": "admin", "password": "123456", "role": "ADMIN"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_login_endpoint_returns_success_without_password(
