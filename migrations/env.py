@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.models.attachment import AttachmentBase
 from app.models.auth import AuthBase
+from app.models.campaign import CampaignBase
 from app.models.email_tracking import Base
 from config.settings import load_settings
 
@@ -15,7 +16,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = [Base.metadata, AttachmentBase.metadata, AuthBase.metadata]
+target_metadata = [
+    Base.metadata,
+    AttachmentBase.metadata,
+    AuthBase.metadata,
+    CampaignBase.metadata,
+]
 
 
 def _database_url() -> str:

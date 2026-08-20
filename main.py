@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from app.api.auth_routes import auth_service, router as auth_router
+from app.api.campaign_routes import campaign_service, router as campaign_router
 from app.api.attachment_routes import attachment_service, router as attachment_router
 from app.api.attachment_download_routes import router as attachment_download_router
 from app.api.attachment_mapping_routes import router as attachment_mapping_router
@@ -63,6 +64,11 @@ async def lifespan(_: FastAPI):
         logger.info("Authentication system_users table ready")
     except Exception as exc:
         logger.error("Authentication initialization failed: %s", exc, exc_info=True)
+    try:
+        campaign_service.initialize()
+        logger.info("Campaign Management campaigns table ready")
+    except Exception as exc:
+        logger.error("Campaign Management initialization failed: %s", exc, exc_info=True)
     logger.info(
         "%s started; environment=%s public_base_url=%s",
         settings.application_name,
@@ -74,6 +80,7 @@ async def lifespan(_: FastAPI):
         ", ".join(settings.cors_allowed_origins),
     )
     yield
+    campaign_service.dispose()
     auth_service.dispose()
     attachment_service.dispose()
     database_service.dispose()
@@ -146,7 +153,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_allowed_origins),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
         "Accept",
         "Accept-Language",
@@ -162,6 +169,7 @@ app.include_router(attachment_router)
 app.include_router(attachment_download_router)
 app.include_router(attachment_mapping_router)
 app.include_router(auth_router)
+app.include_router(campaign_router)
 
 
 @app.exception_handler(StarletteHTTPException)
