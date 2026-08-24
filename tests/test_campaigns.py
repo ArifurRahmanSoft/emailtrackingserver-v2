@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -180,6 +180,89 @@ def test_duplicate_campaign_code_returns_http_409(
     assert response.status_code == 409
 
 
+def test_get_campaign_codes_returns_200_with_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/codes")
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "campaign_codes": []}
+
+
+def test_get_campaign_codes_returns_multiple_codes_sorted_ascending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("Campaign 21", "C021")
+    service.create_campaign("Campaign 01", "C001")
+    service.create_campaign("Campaign 10", "C010")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/codes")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "campaign_codes": ["C001", "C010", "C021"],
+    }
+
+
+def test_get_campaign_codes_excludes_null_empty_and_whitespace_values() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE campaigns (campaign_code VARCHAR(100))"))
+        connection.execute(
+            text(
+                "INSERT INTO campaigns (campaign_code) VALUES "
+                "(NULL), (''), ('   '), ('C001'), ('C002')"
+            )
+        )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    service = CampaignService(None)
+    service._engine = engine
+    service._session_factory = session_factory
+
+    assert service.get_campaign_codes() == ["C001", "C002"]
+
+
+def test_campaign_code_unique_constraint_prevents_duplicates() -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("First Campaign", "C001")
+
+    with pytest.raises(DuplicateCampaignCodeError):
+        service.create_campaign("Duplicate Campaign", "C001")
+
+
+def test_get_campaign_codes_is_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign 01", "C001")
+    service.create_campaign("Campaign 02", "C002")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    with session_factory() as session:
+        before = [
+            (campaign.id, campaign.campaign_name, campaign.campaign_code)
+            for campaign in session.scalars(select(Campaign)).all()
+        ]
+
+    response = client.get("/api/campaigns/codes")
+
+    with session_factory() as session:
+        after = [
+            (campaign.id, campaign.campaign_name, campaign.campaign_code)
+            for campaign in session.scalars(select(Campaign)).all()
+        ]
+
+    assert response.status_code == 200
+    assert after == before
+
+
 def test_get_all_campaigns_newest_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -214,6 +297,20 @@ def test_get_one_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 200
     assert response.json()["id"] == str(campaign.id)
     assert response.json()["campaign_code"] == "C021"
+
+
+def test_campaign_codes_route_is_not_interpreted_as_campaign_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("Test Campaign", "C021")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/codes")
+
+    assert response.status_code == 200
+    assert response.json()["campaign_codes"] == ["C021"]
 
 
 def test_unknown_campaign_id_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:

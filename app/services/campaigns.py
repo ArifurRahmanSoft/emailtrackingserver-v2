@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 import logging
 from uuid import UUID
 
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -136,6 +136,26 @@ class CampaignService:
         except Exception as exc:
             raise CampaignDatabaseUnavailableError(
                 f"Unable to list campaigns: {exc}"
+            ) from exc
+
+    def get_campaign_codes(self) -> list[str]:
+        """Return non-empty campaign codes sorted ascending without modifying data."""
+        session_factory = self._require_session_factory()
+        try:
+            with session_factory() as session:
+                return list(
+                    session.scalars(
+                        select(Campaign.campaign_code)
+                        .where(
+                            Campaign.campaign_code.is_not(None),
+                            func.trim(Campaign.campaign_code) != "",
+                        )
+                        .order_by(Campaign.campaign_code.asc())
+                    )
+                )
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to list campaign codes: {exc}"
             ) from exc
 
     def get_campaign(self, campaign_id: UUID) -> Campaign:

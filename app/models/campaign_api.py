@@ -55,3 +55,10 @@ class CampaignDeleteResponse(BaseModel):
     success: bool
     id: UUID
     message: str
+
+
+class CampaignCodeListResponse(BaseModel):
+    """Read-only list of available campaign codes."""
+
+    success: bool
+    campaign_codes: list[str]

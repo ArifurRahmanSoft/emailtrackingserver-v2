@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.campaign import Campaign
 from app.models.campaign_api import (
+    CampaignCodeListResponse,
     CampaignDeleteResponse,
     CampaignMutationResponse,
     CampaignPayload,
@@ -148,6 +149,45 @@ async def list_campaigns(request: Request) -> list[CampaignResponse]:
         request_time.isoformat(),
     )
     return [_to_response(campaign) for campaign in campaigns]
+
+
+@router.get(
+    "/codes",
+    response_model=CampaignCodeListResponse,
+    summary="List campaign codes",
+)
+async def list_campaign_codes(request: Request) -> CampaignCodeListResponse:
+    """Return all usable campaign codes for EmailAutomation dropdowns."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+
+    try:
+        campaign_codes = await run_in_threadpool(campaign_service.get_campaign_codes)
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Campaign code list failed: client_ip=%s user_agent=%s request_time=%s "
+            "error=%s",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Campaign codes are temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Campaign code list requested: client_ip=%s user_agent=%s returned_count=%d "
+        "request_time=%s",
+        client_ip,
+        user_agent,
+        len(campaign_codes),
+        request_time.isoformat(),
+    )
+    return CampaignCodeListResponse(success=True, campaign_codes=campaign_codes)
 
 
 @router.get(
