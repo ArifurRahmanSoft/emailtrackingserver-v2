@@ -10,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 from app.models.campaign import Campaign
 from app.models.campaign_api import (
     CampaignCodeListResponse,
+    CampaignDashboardFilter,
+    CampaignDashboardItem,
+    CampaignDashboardResponse,
     CampaignDeleteResponse,
     CampaignMutationResponse,
     CampaignPayload,
@@ -188,6 +191,90 @@ async def list_campaign_codes(request: Request) -> CampaignCodeListResponse:
         request_time.isoformat(),
     )
     return CampaignCodeListResponse(success=True, campaign_codes=campaign_codes)
+
+
+@router.get(
+    "/dashboard",
+    response_model=CampaignDashboardResponse,
+    summary="Campaign-wise dashboard metrics",
+)
+async def get_campaign_dashboard(
+    request: Request,
+    campaign_code: str | None = None,
+) -> CampaignDashboardResponse:
+    """Return read-only campaign-wise dashboard reporting metrics."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+    clean_campaign_code = campaign_code.strip() if campaign_code else None
+
+    try:
+        dashboard_rows = await run_in_threadpool(
+            campaign_service.get_campaign_dashboard,
+            clean_campaign_code,
+            request_time,
+        )
+    except CampaignNotFoundError as exc:
+        logger.warning(
+            "Campaign dashboard rejected: campaign_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=not_found",
+            clean_campaign_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign not found.",
+        ) from exc
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Campaign dashboard failed: campaign_code=%s client_ip=%s user_agent=%s "
+            "request_time=%s error=%s",
+            clean_campaign_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Campaign dashboard is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Campaign dashboard requested: campaign_code=%s client_ip=%s user_agent=%s "
+        "returned_count=%d request_time=%s",
+        clean_campaign_code,
+        client_ip,
+        user_agent,
+        len(dashboard_rows),
+        request_time.isoformat(),
+    )
+    return CampaignDashboardResponse(
+        success=True,
+        filter=CampaignDashboardFilter(campaign_code=clean_campaign_code),
+        campaigns=[
+            CampaignDashboardItem(
+                campaign_code=row.campaign_code,
+                campaign_name=row.campaign_name,
+                clint_name=row.client_name,
+                start_date=row.start_date,
+                end_date=row.end_date,
+                total_mail_sent=row.total_mail_sent,
+                total_click=row.total_click,
+                total_reply=row.total_reply,
+                total_bounce=row.total_bounce,
+                total_download=row.total_download,
+                success_rate=row.success_rate,
+                failure_rate=row.failure_rate,
+                monthly_sent=row.monthly_sent,
+                weekly_sent=row.weekly_sent,
+            )
+            for row in dashboard_rows
+        ],
+    )
 
 
 @router.get(

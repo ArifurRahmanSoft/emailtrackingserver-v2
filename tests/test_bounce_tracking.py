@@ -84,6 +84,30 @@ def test_first_bounce_marks_existing_row_without_touching_counters() -> None:
     assert record.reply_count == 1
 
 
+def test_bounce_preserves_existing_campaign_code() -> None:
+    service, session_factory = build_database_service()
+    with session_factory() as session:
+        session.add(
+            EmailTracking(
+                tracking_id=TRACKING_ID,
+                message_id=MESSAGE_ID,
+                campaign_code="C001",
+            )
+        )
+        session.commit()
+
+    service.record_bounce(MESSAGE_ID, "550 5.1.1 User Unknown")
+
+    with session_factory() as session:
+        record = session.scalar(
+            select(EmailTracking).where(EmailTracking.message_id == MESSAGE_ID)
+        )
+
+    assert record is not None
+    assert record.is_bounce == 1
+    assert record.campaign_code == "C001"
+
+
 def test_repeated_bounce_preserves_first_bounce_time_and_updates_reason() -> None:
     service, session_factory = build_database_service()
     first_time = datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc)

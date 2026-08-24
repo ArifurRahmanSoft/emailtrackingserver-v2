@@ -27,6 +27,7 @@ def build_campaign_service() -> tuple[CampaignService, sessionmaker]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    Base.metadata.create_all(engine)
     CampaignBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     service = CampaignService(None)
@@ -311,6 +312,276 @@ def test_campaign_codes_route_is_not_interpreted_as_campaign_uuid(
 
     assert response.status_code == 200
     assert response.json()["campaign_codes"] == ["C021"]
+
+
+def test_campaign_dashboard_all_campaigns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign(
+        "Campaign One",
+        "C001",
+        start_date=date(2026, 8, 1),
+        end_date=date(2026, 8, 31),
+        client_name="Arifur Rahman",
+    )
+    service.create_campaign("Campaign Two", "C002")
+    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="c001-001",
+                    campaign_code="C001",
+                    click_count=3,
+                    reply_count=1,
+                    is_bounce=0,
+                    download_count=2,
+                    open_count=0,
+                    created_at=now,
+                ),
+                EmailTracking(
+                    tracking_id="c001-002",
+                    campaign_code="C001",
+                    click_count=2,
+                    reply_count=2,
+                    is_bounce=1,
+                    download_count=4,
+                    open_count=0,
+                    created_at=now,
+                ),
+                EmailTracking(
+                    tracking_id="c002-001",
+                    campaign_code="C002",
+                    click_count=7,
+                    reply_count=0,
+                    is_bounce=0,
+                    download_count=1,
+                    open_count=0,
+                    created_at=now,
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["filter"] == {"campaign_code": None}
+    assert [item["campaign_code"] for item in body["campaigns"]] == ["C001", "C002"]
+    c001 = body["campaigns"][0]
+    assert c001["campaign_name"] == "Campaign One"
+    assert c001["clint_name"] == "Arifur Rahman"
+    assert c001["start_date"] == "2026-08-01"
+    assert c001["end_date"] == "2026-08-31"
+    assert c001["total_mail_sent"] == 2
+    assert c001["total_click"] == 5
+    assert c001["total_reply"] == 3
+    assert c001["total_bounce"] == 1
+    assert c001["total_download"] == 6
+    assert c001["success_rate"] == 50.0
+    assert c001["failure_rate"] == 50.0
+    assert c001["monthly_sent"] == 2
+    assert c001["weekly_sent"] == 2
+
+
+def test_campaign_dashboard_single_campaign_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign One", "C001")
+    service.create_campaign("Campaign Two", "C002")
+    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="c001-001",
+                    campaign_code="C001",
+                    click_count=1,
+                    reply_count=1,
+                    download_count=1,
+                    is_bounce=0,
+                    open_count=0,
+                    created_at=now,
+                ),
+                EmailTracking(
+                    tracking_id="c002-001",
+                    campaign_code="C002",
+                    click_count=9,
+                    reply_count=9,
+                    download_count=9,
+                    is_bounce=1,
+                    open_count=0,
+                    created_at=now,
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard?campaign_code=C001")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filter"] == {"campaign_code": "C001"}
+    assert len(body["campaigns"]) == 1
+    assert body["campaigns"][0]["campaign_code"] == "C001"
+    assert body["campaigns"][0]["total_click"] == 1
+    assert body["campaigns"][0]["total_reply"] == 1
+    assert body["campaigns"][0]["total_download"] == 1
+    assert body["campaigns"][0]["total_bounce"] == 0
+
+
+def test_campaign_dashboard_monthly_and_weekly_sent_use_existing_rolling_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign One", "C001")
+    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="weekly",
+                    campaign_code="C001",
+                    created_at=datetime(2026, 8, 20, 9, 30, tzinfo=timezone.utc),
+                    open_count=0,
+                    click_count=0,
+                ),
+                EmailTracking(
+                    tracking_id="monthly",
+                    campaign_code="C001",
+                    created_at=datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc),
+                    open_count=0,
+                    click_count=0,
+                ),
+                EmailTracking(
+                    tracking_id="older",
+                    campaign_code="C001",
+                    created_at=datetime(2026, 7, 1, 9, 30, tzinfo=timezone.utc),
+                    open_count=0,
+                    click_count=0,
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard?campaign_code=C001")
+
+    assert response.status_code == 200
+    campaign = response.json()["campaigns"][0]
+    assert campaign["total_mail_sent"] == 3
+    assert campaign["monthly_sent"] == 2
+    assert campaign["weekly_sent"] == 1
+
+
+def test_campaign_dashboard_campaign_with_zero_tracking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("No Tracking Campaign", "C001")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard?campaign_code=C001")
+
+    assert response.status_code == 200
+    campaign = response.json()["campaigns"][0]
+    assert campaign["campaign_name"] == "No Tracking Campaign"
+    assert campaign["total_mail_sent"] == 0
+    assert campaign["total_click"] == 0
+    assert campaign["total_reply"] == 0
+    assert campaign["total_bounce"] == 0
+    assert campaign["total_download"] == 0
+    assert campaign["success_rate"] == 0.0
+    assert campaign["failure_rate"] == 0.0
+    assert campaign["monthly_sent"] == 0
+    assert campaign["weekly_sent"] == 0
+
+
+def test_campaign_dashboard_unknown_campaign_code_returns_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("Campaign One", "C001")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard?campaign_code=UNKNOWN")
+
+    assert response.status_code == 404
+
+
+def test_campaign_dashboard_multiple_campaigns_remain_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign One", "C001")
+    service.create_campaign("Campaign Two", "C002")
+    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="c001",
+                    campaign_code="C001",
+                    click_count=1,
+                    reply_count=2,
+                    download_count=3,
+                    is_bounce=0,
+                    open_count=0,
+                    created_at=now,
+                ),
+                EmailTracking(
+                    tracking_id="c002",
+                    campaign_code="C002",
+                    click_count=10,
+                    reply_count=20,
+                    download_count=30,
+                    is_bounce=1,
+                    open_count=0,
+                    created_at=now,
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard")
+
+    assert response.status_code == 200
+    by_code = {item["campaign_code"]: item for item in response.json()["campaigns"]}
+    assert by_code["C001"]["total_click"] == 1
+    assert by_code["C001"]["total_reply"] == 2
+    assert by_code["C001"]["total_download"] == 3
+    assert by_code["C001"]["total_bounce"] == 0
+    assert by_code["C002"]["total_click"] == 10
+    assert by_code["C002"]["total_reply"] == 20
+    assert by_code["C002"]["total_download"] == 30
+    assert by_code["C002"]["total_bounce"] == 1
+
+
+def test_campaign_dashboard_route_is_not_interpreted_as_campaign_uuid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    service.create_campaign("Campaign One", "C001")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard")
+
+    assert response.status_code == 200
+    assert response.json()["campaigns"][0]["campaign_code"] == "C001"
 
 
 def test_unknown_campaign_id_returns_404(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -62,3 +62,36 @@ class CampaignCodeListResponse(BaseModel):
 
     success: bool
     campaign_codes: list[str]
+
+
+class CampaignDashboardFilter(BaseModel):
+    """Applied campaign dashboard filter values."""
+
+    campaign_code: str | None
+
+
+class CampaignDashboardItem(BaseModel):
+    """One campaign-wise dashboard row."""
+
+    campaign_code: str
+    campaign_name: str
+    clint_name: str | None
+    start_date: date | None
+    end_date: date | None
+    total_mail_sent: int
+    total_click: int
+    total_reply: int
+    total_bounce: int
+    total_download: int
+    success_rate: float
+    failure_rate: float
+    monthly_sent: int
+    weekly_sent: int
+
+
+class CampaignDashboardResponse(BaseModel):
+    """Campaign-wise dashboard response."""
+
+    success: bool
+    filter: CampaignDashboardFilter
+    campaigns: list[CampaignDashboardItem]

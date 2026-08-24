@@ -1,14 +1,16 @@
 """Database operations for independent campaign management."""
 
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 import logging
 from uuid import UUID
 
-from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy import Engine, case, create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.campaign import Campaign, CampaignBase
+from app.models.email_tracking import EmailTracking
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,26 @@ class CampaignNotFoundError(CampaignServiceError):
 
 class CampaignValidationError(CampaignServiceError):
     """Raised when campaign data violates business validation rules."""
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignDashboardResult:
+    """Aggregated campaign-wise dashboard metrics."""
+
+    campaign_code: str
+    campaign_name: str
+    client_name: str | None
+    start_date: date | None
+    end_date: date | None
+    total_mail_sent: int
+    total_click: int
+    total_reply: int
+    total_bounce: int
+    total_download: int
+    success_rate: float
+    failure_rate: float
+    monthly_sent: int
+    weekly_sent: int
 
 
 class CampaignService:
@@ -158,6 +180,101 @@ class CampaignService:
                 f"Unable to list campaign codes: {exc}"
             ) from exc
 
+    def get_campaign_dashboard(
+        self,
+        campaign_code: str | None = None,
+        generated_at: datetime | None = None,
+    ) -> list[CampaignDashboardResult]:
+        """Return read-only campaign metadata with aggregated tracking metrics."""
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(generated_at or datetime.now(timezone.utc))
+        weekly_threshold = timestamp - timedelta(days=7)
+        monthly_threshold = timestamp - timedelta(days=30)
+        clean_campaign_code = (
+            self._clean_optional(campaign_code) if campaign_code is not None else None
+        )
+
+        try:
+            with session_factory() as session:
+                if clean_campaign_code is not None:
+                    exists = session.scalar(
+                        select(Campaign.id).where(
+                            Campaign.campaign_code == clean_campaign_code
+                        )
+                    )
+                    if exists is None:
+                        raise CampaignNotFoundError("Campaign not found.")
+
+                statement = (
+                    select(
+                        Campaign.campaign_code.label("campaign_code"),
+                        Campaign.campaign_name.label("campaign_name"),
+                        Campaign.client_name.label("client_name"),
+                        Campaign.start_date.label("start_date"),
+                        Campaign.end_date.label("end_date"),
+                        func.count(EmailTracking.id).label("total_mail_sent"),
+                        func.coalesce(func.sum(EmailTracking.click_count), 0).label(
+                            "total_click"
+                        ),
+                        func.coalesce(func.sum(EmailTracking.reply_count), 0).label(
+                            "total_reply"
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                case((EmailTracking.is_bounce == 1, 1), else_=0)
+                            ),
+                            0,
+                        ).label("total_bounce"),
+                        func.coalesce(func.sum(EmailTracking.download_count), 0).label(
+                            "total_download"
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (EmailTracking.created_at >= monthly_threshold, 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ).label("monthly_sent"),
+                        func.coalesce(
+                            func.sum(
+                                case(
+                                    (EmailTracking.created_at >= weekly_threshold, 1),
+                                    else_=0,
+                                )
+                            ),
+                            0,
+                        ).label("weekly_sent"),
+                    )
+                    .select_from(Campaign)
+                    .outerjoin(
+                        EmailTracking,
+                        EmailTracking.campaign_code == Campaign.campaign_code,
+                    )
+                    .group_by(
+                        Campaign.campaign_code,
+                        Campaign.campaign_name,
+                        Campaign.client_name,
+                        Campaign.start_date,
+                        Campaign.end_date,
+                    )
+                    .order_by(Campaign.campaign_code.asc())
+                )
+                if clean_campaign_code is not None:
+                    statement = statement.where(
+                        Campaign.campaign_code == clean_campaign_code
+                    )
+
+                rows = session.execute(statement).mappings().all()
+                return [self._dashboard_result_from_row(row) for row in rows]
+        except CampaignNotFoundError:
+            raise
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to build campaign dashboard: {exc}"
+            ) from exc
+
     def get_campaign(self, campaign_id: UUID) -> Campaign:
         """Return one campaign by UUID."""
         session_factory = self._require_session_factory()
@@ -266,6 +383,46 @@ class CampaignService:
         if not cleaned:
             raise CampaignValidationError(f"{field_name} is required.")
         return cleaned
+
+    @staticmethod
+    def _clean_optional(value: str | None) -> str | None:
+        """Trim optional text values and normalize blanks to None."""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @staticmethod
+    def _dashboard_result_from_row(row) -> CampaignDashboardResult:
+        """Convert one aggregate row to a dashboard result."""
+        total_mail_sent = int(row["total_mail_sent"] or 0)
+        total_bounce = int(row["total_bounce"] or 0)
+        if total_mail_sent == 0:
+            success_rate = 0.0
+            failure_rate = 0.0
+        else:
+            success_rate = round(
+                ((total_mail_sent - total_bounce) / total_mail_sent) * 100,
+                2,
+            )
+            failure_rate = round((total_bounce / total_mail_sent) * 100, 2)
+
+        return CampaignDashboardResult(
+            campaign_code=row["campaign_code"],
+            campaign_name=row["campaign_name"],
+            client_name=row["client_name"],
+            start_date=row["start_date"],
+            end_date=row["end_date"],
+            total_mail_sent=total_mail_sent,
+            total_click=int(row["total_click"] or 0),
+            total_reply=int(row["total_reply"] or 0),
+            total_bounce=total_bounce,
+            total_download=int(row["total_download"] or 0),
+            success_rate=success_rate,
+            failure_rate=failure_rate,
+            monthly_sent=int(row["monthly_sent"] or 0),
+            weekly_sent=int(row["weekly_sent"] or 0),
+        )
 
     @staticmethod
     def _normalize_database_url(database_url: str) -> str:
