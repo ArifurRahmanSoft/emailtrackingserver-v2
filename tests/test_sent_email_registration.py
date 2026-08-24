@@ -45,6 +45,7 @@ def test_sent_email_registration_populates_new_v2_columns(
             recipient_mail="recipient@example.com",
             mail_subject="Quarterly Update",
             project_name="Q3 Outreach",
+            campaign_code="C001",
             excel_file_path=r"F:\CODEX\EmailAutomation\data\mail_list.xlsx",
             message_id="<smtp-message-123@example.com>",
         ),
@@ -63,6 +64,7 @@ def test_sent_email_registration_populates_new_v2_columns(
     assert record.recipient_email == "recipient@example.com"
     assert record.mail_subject == "Quarterly Update"
     assert record.project_name == "Q3 Outreach"
+    assert record.campaign_code == "C001"
     assert record.excel_file_path == r"F:\CODEX\EmailAutomation\data\mail_list.xlsx"
     assert record.excel_file_name == "mail_list.xlsx"
     assert record.message_id == "<smtp-message-123@example.com>"
@@ -126,6 +128,7 @@ def test_missing_v2_metadata_remains_null_for_backward_compatibility(
     assert record.recipient_email is None
     assert record.mail_subject is None
     assert record.project_name is None
+    assert record.campaign_code is None
     assert record.excel_file_path is None
     assert record.excel_file_name is None
     assert record.message_id is None
@@ -234,6 +237,7 @@ def test_register_send_endpoint_accepts_v2_request(
             "recipient_mail": "recipient@example.com",
             "mail_subject": "Quarterly Update",
             "project_name": "Q3 Outreach",
+            "campaign_code": "C001",
             "excel_file_path": r"F:\CODEX\EmailAutomation\data\mail_list.xlsx",
             "message_id": "<smtp-message-123@example.com>",
         },
@@ -246,6 +250,7 @@ def test_register_send_endpoint_accepts_v2_request(
         "excel_file_name": "mail_list.xlsx",
     }
     assert database.registrations[0].project_name == "Q3 Outreach"
+    assert database.registrations[0].campaign_code == "C001"
     assert database.registrations[0].message_id == "<smtp-message-123@example.com>"
 
 

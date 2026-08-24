@@ -16,6 +16,7 @@ REQUIRED_V2_COLUMNS = {
     "sender_mail",
     "mail_subject",
     "project_name",
+    "campaign_code",
     "excel_file_path",
     "excel_file_name",
     "last_synchronize_time",
@@ -166,6 +167,7 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
             text(
                 """
                 SELECT
+                    campaign_code,
                     download_count,
                     first_download,
                     last_download,
@@ -197,6 +199,7 @@ def test_missing_v2_columns_are_created_by_migrations() -> None:
     }.issubset(system_user_columns)
     assert "ix_system_users_user_id" in system_user_indexes
     assert "ix_system_users_role" in system_user_indexes
+    assert row["campaign_code"] is None
     assert row["download_count"] == 0
     assert row["first_download"] is None
     assert row["last_download"] is None
@@ -281,6 +284,7 @@ def test_legacy_tracking_rows_still_work_with_new_nullable_columns() -> None:
     assert record.sender_mail is None
     assert record.mail_subject is None
     assert record.project_name is None
+    assert record.campaign_code is None
     assert record.excel_file_path is None
     assert record.excel_file_name is None
     assert record.last_synchronize_time is None

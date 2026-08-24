@@ -88,6 +88,7 @@ class SentEmailRegistration:
     recipient_mail: str | None = None
     mail_subject: str | None = None
     project_name: str | None = None
+    campaign_code: str | None = None
     excel_file_path: str | None = None
     message_id: str | None = None
 
@@ -593,6 +594,9 @@ class DatabaseTrackingService:
                 )
                 record.project_name = self._clean_optional(
                     registration.project_name
+                )
+                record.campaign_code = self._clean_optional(
+                    registration.campaign_code
                 )
                 record.excel_file_path = excel_file_path
                 record.excel_file_name = excel_file_name

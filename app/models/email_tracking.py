@@ -22,6 +22,7 @@ class EmailTracking(Base):
     sender_mail: Mapped[str | None] = mapped_column(String(320), nullable=True)
     mail_subject: Mapped[str | None] = mapped_column(String(998), nullable=True)
     project_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    campaign_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     excel_file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     excel_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     message_id: Mapped[str | None] = mapped_column(

@@ -137,10 +137,11 @@ async def register_sent_email(
     """Register V2 email-send metadata without changing tracking counters."""
     logger.info(
         "Register-send request received: tracking_id=%s sender_mail=%s "
-        "recipient_mail=%s message_id=%s",
+        "recipient_mail=%s campaign_code=%s message_id=%s",
         payload.tracking_id,
         payload.sender_mail,
         payload.recipient_mail,
+        payload.campaign_code,
         payload.message_id,
     )
     try:
@@ -159,6 +160,7 @@ async def register_sent_email(
                 recipient_mail=payload.recipient_mail,
                 mail_subject=payload.mail_subject,
                 project_name=payload.project_name,
+                campaign_code=payload.campaign_code,
                 excel_file_path=payload.excel_file_path,
                 message_id=payload.message_id,
             ),
@@ -166,11 +168,13 @@ async def register_sent_email(
 
         logger.info(
             "Sent email registered: tracking_id=%s sender_mail=%s recipient_mail=%s "
-            "project_name=%s excel_file_name=%s message_id=%s status=success",
+            "project_name=%s campaign_code=%s excel_file_name=%s message_id=%s "
+            "status=success",
             tracking_id,
             payload.sender_mail,
             payload.recipient_mail,
             payload.project_name,
+            payload.campaign_code,
             result.excel_file_name,
             payload.message_id,
         )
