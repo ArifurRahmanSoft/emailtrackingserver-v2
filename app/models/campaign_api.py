@@ -78,8 +78,8 @@ class CampaignDashboardItem(BaseModel):
     campaign_code: str
     campaign_name: str
     clint_name: str | None
-    start_date: date | None
-    end_date: date | None
+    start_date: date | str | None
+    end_date: date | str | None
     total_mail_sent: int
     total_click: int
     total_reply: int
@@ -89,6 +89,7 @@ class CampaignDashboardItem(BaseModel):
     failure_rate: float
     monthly_sent: int
     weekly_sent: int
+    is_total: bool = False
 
 
 class CampaignDashboardResponse(BaseModel):

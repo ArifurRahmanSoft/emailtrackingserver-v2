@@ -256,25 +256,10 @@ async def get_campaign_dashboard(
     return CampaignDashboardResponse(
         success=True,
         filter=CampaignDashboardFilter(campaign_code=clean_campaign_code),
-        campaigns=[
-            CampaignDashboardItem(
-                campaign_code=row.campaign_code,
-                campaign_name=row.campaign_name,
-                clint_name=row.client_name,
-                start_date=row.start_date,
-                end_date=row.end_date,
-                total_mail_sent=row.total_mail_sent,
-                total_click=row.total_click,
-                total_reply=row.total_reply,
-                total_bounce=row.total_bounce,
-                total_download=row.total_download,
-                success_rate=row.success_rate,
-                failure_rate=row.failure_rate,
-                monthly_sent=row.monthly_sent,
-                weekly_sent=row.weekly_sent,
-            )
-            for row in dashboard_rows
-        ],
+        campaigns=_build_campaign_dashboard_items(
+            dashboard_rows,
+            include_total=clean_campaign_code is None,
+        ),
     )
 
 
@@ -492,4 +477,72 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         campaign_offer=campaign.campaign_offer,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,
+    )
+
+
+def _build_campaign_dashboard_items(
+    dashboard_rows: list,
+    include_total: bool,
+) -> list[CampaignDashboardItem]:
+    """Convert campaign dashboard rows and optionally append a total summary row."""
+    items = [
+        CampaignDashboardItem(
+            campaign_code=row.campaign_code,
+            campaign_name=row.campaign_name,
+            clint_name=row.client_name,
+            start_date=row.start_date,
+            end_date=row.end_date,
+            total_mail_sent=row.total_mail_sent,
+            total_click=row.total_click,
+            total_reply=row.total_reply,
+            total_bounce=row.total_bounce,
+            total_download=row.total_download,
+            success_rate=row.success_rate,
+            failure_rate=row.failure_rate,
+            monthly_sent=row.monthly_sent,
+            weekly_sent=row.weekly_sent,
+            is_total=False,
+        )
+        for row in dashboard_rows
+    ]
+
+    if include_total:
+        items.append(_build_campaign_dashboard_total_item(items))
+
+    return items
+
+
+def _build_campaign_dashboard_total_item(
+    items: list[CampaignDashboardItem],
+) -> CampaignDashboardItem:
+    """Build the all-campaign summary row from already aggregated campaign totals."""
+    total_mail_sent = sum(item.total_mail_sent for item in items)
+    total_bounce = sum(item.total_bounce for item in items)
+
+    if total_mail_sent == 0:
+        success_rate = 0.0
+        failure_rate = 0.0
+    else:
+        success_rate = round(
+            ((total_mail_sent - total_bounce) / total_mail_sent) * 100,
+            2,
+        )
+        failure_rate = round((total_bounce / total_mail_sent) * 100, 2)
+
+    return CampaignDashboardItem(
+        campaign_code="",
+        campaign_name="",
+        clint_name="",
+        start_date="",
+        end_date="",
+        total_mail_sent=total_mail_sent,
+        total_click=sum(item.total_click for item in items),
+        total_reply=sum(item.total_reply for item in items),
+        total_bounce=total_bounce,
+        total_download=sum(item.total_download for item in items),
+        success_rate=success_rate,
+        failure_rate=failure_rate,
+        monthly_sent=sum(item.monthly_sent for item in items),
+        weekly_sent=sum(item.weekly_sent for item in items),
+        is_total=True,
     )

@@ -480,10 +480,15 @@ def test_campaign_dashboard_all_campaigns(
     body = response.json()
     assert body["success"] is True
     assert body["filter"] == {"campaign_code": None}
-    assert [item["campaign_code"] for item in body["campaigns"]] == ["C001", "C002"]
+    assert [item["campaign_code"] for item in body["campaigns"]] == [
+        "C001",
+        "C002",
+        "",
+    ]
     c001 = body["campaigns"][0]
     assert c001["campaign_name"] == "Campaign One"
     assert c001["clint_name"] == "Arifur Rahman"
+    assert c001["is_total"] is False
     assert c001["start_date"] == "2026-08-01"
     assert c001["end_date"] == "2026-08-31"
     assert c001["total_mail_sent"] == 2
@@ -495,6 +500,22 @@ def test_campaign_dashboard_all_campaigns(
     assert c001["failure_rate"] == 50.0
     assert c001["monthly_sent"] == 2
     assert c001["weekly_sent"] == 2
+    total = body["campaigns"][-1]
+    assert total["is_total"] is True
+    assert total["campaign_code"] == ""
+    assert total["campaign_name"] == ""
+    assert total["clint_name"] == ""
+    assert total["start_date"] == ""
+    assert total["end_date"] == ""
+    assert total["total_mail_sent"] == 3
+    assert total["total_click"] == 12
+    assert total["total_reply"] == 3
+    assert total["total_bounce"] == 1
+    assert total["total_download"] == 7
+    assert total["success_rate"] == 66.67
+    assert total["failure_rate"] == 33.33
+    assert total["monthly_sent"] == 3
+    assert total["weekly_sent"] == 3
 
 
 def test_campaign_dashboard_single_campaign_filter(
@@ -540,6 +561,7 @@ def test_campaign_dashboard_single_campaign_filter(
     assert body["filter"] == {"campaign_code": "C001"}
     assert len(body["campaigns"]) == 1
     assert body["campaigns"][0]["campaign_code"] == "C001"
+    assert body["campaigns"][0]["is_total"] is False
     assert body["campaigns"][0]["total_click"] == 1
     assert body["campaigns"][0]["total_reply"] == 1
     assert body["campaigns"][0]["total_download"] == 1
@@ -676,6 +698,38 @@ def test_campaign_dashboard_multiple_campaigns_remain_isolated(
     assert by_code["C002"]["total_reply"] == 20
     assert by_code["C002"]["total_download"] == 30
     assert by_code["C002"]["total_bounce"] == 1
+    assert by_code[""]["is_total"] is True
+    assert by_code[""]["total_mail_sent"] == 2
+    assert by_code[""]["total_click"] == 11
+    assert by_code[""]["total_reply"] == 22
+    assert by_code[""]["total_download"] == 33
+    assert by_code[""]["total_bounce"] == 1
+
+
+def test_campaign_dashboard_without_campaigns_returns_total_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/dashboard")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["campaigns"]) == 1
+    total = body["campaigns"][0]
+    assert total["is_total"] is True
+    assert total["campaign_code"] == ""
+    assert total["total_mail_sent"] == 0
+    assert total["total_click"] == 0
+    assert total["total_reply"] == 0
+    assert total["total_bounce"] == 0
+    assert total["total_download"] == 0
+    assert total["monthly_sent"] == 0
+    assert total["weekly_sent"] == 0
+    assert total["success_rate"] == 0.0
+    assert total["failure_rate"] == 0.0
 
 
 def test_campaign_dashboard_route_is_not_interpreted_as_campaign_uuid(
