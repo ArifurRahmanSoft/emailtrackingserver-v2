@@ -25,6 +25,7 @@ class Campaign(CampaignBase):
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     file_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     client_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     campaign_offer: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

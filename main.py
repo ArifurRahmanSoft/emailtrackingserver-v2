@@ -15,7 +15,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from app.api.auth_routes import auth_service, router as auth_router
+from app.api.auth_routes import (
+    auth_service,
+    router as auth_router,
+    system_users_router,
+)
 from app.api.campaign_routes import campaign_service, router as campaign_router
 from app.api.attachment_routes import attachment_service, router as attachment_router
 from app.api.attachment_download_routes import router as attachment_download_router
@@ -169,6 +173,7 @@ app.include_router(attachment_router)
 app.include_router(attachment_download_router)
 app.include_router(attachment_mapping_router)
 app.include_router(auth_router)
+app.include_router(system_users_router)
 app.include_router(campaign_router)
 
 

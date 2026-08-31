@@ -57,6 +57,7 @@ async def create_campaign(
             payload.end_date,
             payload.file_name,
             payload.client_name,
+            payload.client_code,
             payload.campaign_offer,
             request_time,
         )
@@ -343,6 +344,7 @@ async def update_campaign(
             payload.end_date,
             payload.file_name,
             payload.client_name,
+            payload.client_code,
             payload.campaign_offer,
             update_time,
         )
@@ -486,6 +488,7 @@ def _to_response(campaign: Campaign) -> CampaignResponse:
         end_date=campaign.end_date,
         file_name=campaign.file_name,
         client_name=campaign.client_name,
+        client_code=campaign.client_code,
         campaign_offer=campaign.campaign_offer,
         created_at=campaign.created_at,
         updated_at=campaign.updated_at,

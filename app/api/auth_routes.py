@@ -14,6 +14,7 @@ from app.models.auth_api import (
     AuthUpdateUserResponse,
     AuthUserListItem,
     AuthUserResponse,
+    ClientCodeListResponse,
 )
 from app.services.auth import (
     AuthDatabaseUnavailableError,
@@ -26,6 +27,7 @@ from config.settings import load_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+system_users_router = APIRouter(prefix="/api/system-users", tags=["System Users"])
 settings = load_settings()
 auth_service = AuthService(settings.database_url)
 
@@ -99,6 +101,45 @@ async def register_user(
         role=result.role,
         register_date=result.register_date,
     )
+
+
+@system_users_router.get(
+    "/client-codes",
+    response_model=ClientCodeListResponse,
+    summary="List system-user client codes",
+)
+async def list_client_codes(request: Request) -> ClientCodeListResponse:
+    """Return system_users.user_id values for campaign client-code dropdowns."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+
+    try:
+        client_codes = await run_in_threadpool(auth_service.get_client_codes)
+    except AuthDatabaseUnavailableError as exc:
+        logger.error(
+            "Client code list failed: client_ip=%s user_agent=%s request_time=%s "
+            "error=%s",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Client codes are temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Client code list requested: client_ip=%s user_agent=%s returned_count=%d "
+        "request_time=%s",
+        client_ip,
+        user_agent,
+        len(client_codes),
+        request_time.isoformat(),
+    )
+    return ClientCodeListResponse(success=True, client_codes=client_codes)
 
 
 @router.get(

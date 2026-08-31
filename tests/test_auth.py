@@ -5,8 +5,9 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import app.api.auth_routes as auth_route_module
 from app.models.auth import AuthBase, SystemUser
@@ -23,7 +24,11 @@ from main import app
 
 
 def build_auth_service() -> tuple[AuthService, sessionmaker]:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+    engine = create_engine(
+        "sqlite+pysqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     AuthBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     service = AuthService(None)
@@ -126,6 +131,55 @@ def test_list_users_returns_all_users_newest_first_without_password() -> None:
 
     assert [user.user_id for user in users] == ["new_user", "old_user"]
     assert all(not hasattr(user, "password") for user in users)
+
+
+def test_client_code_api_returns_system_user_ids_sorted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_auth_service()
+    service.register_user("USER002", "123456", "CLIENT")
+    service.register_user("USER001", "123456", "CLIENT")
+    monkeypatch.setattr(auth_route_module, "auth_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/system-users/client-codes")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "client_codes": ["USER001", "USER002"],
+    }
+
+
+def test_client_code_api_empty_database_returns_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_auth_service()
+    monkeypatch.setattr(auth_route_module, "auth_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/system-users/client-codes")
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "client_codes": []}
+
+
+def test_get_client_codes_excludes_null_empty_and_whitespace_values() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE system_users (user_id VARCHAR(20))"))
+        connection.execute(
+            text(
+                "INSERT INTO system_users (user_id) VALUES "
+                "(NULL), (''), ('   '), ('USER002'), ('USER001')"
+            )
+        )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    service = AuthService(None)
+    service._engine = engine
+    service._session_factory = session_factory
+
+    assert service.get_client_codes() == ["USER001", "USER002"]
 
 
 def test_update_user_succeeds_and_preserves_original_dates() -> None:

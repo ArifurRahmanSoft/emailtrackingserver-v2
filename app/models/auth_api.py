@@ -58,3 +58,10 @@ class AuthUpdateUserResponse(BaseModel):
     role: str
     register_date: datetime
     updated_at: datetime
+
+
+class ClientCodeListResponse(BaseModel):
+    """Read-only list of client codes sourced from system users."""
+
+    success: bool
+    client_codes: list[str]

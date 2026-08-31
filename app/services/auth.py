@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import logging
 from uuid import UUID
 
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.auth import AuthBase, SystemUser
@@ -196,6 +196,27 @@ class AuthService:
         except Exception as exc:
             raise AuthDatabaseUnavailableError(
                 f"Unable to list system users: {exc}"
+            ) from exc
+
+    def get_client_codes(self) -> list[str]:
+        """Return non-empty user_id values for campaign client-code dropdowns."""
+        session_factory = self._require_session_factory()
+
+        try:
+            with session_factory() as session:
+                return list(
+                    session.scalars(
+                        select(SystemUser.user_id)
+                        .where(
+                            SystemUser.user_id.is_not(None),
+                            func.trim(SystemUser.user_id) != "",
+                        )
+                        .order_by(SystemUser.user_id.asc())
+                    )
+                )
+        except Exception as exc:
+            raise AuthDatabaseUnavailableError(
+                f"Unable to list client codes: {exc}"
             ) from exc
 
     def update_user(

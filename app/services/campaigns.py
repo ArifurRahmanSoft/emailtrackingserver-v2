@@ -9,6 +9,7 @@ from sqlalchemy import Engine, case, create_engine, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.models.auth import SystemUser
 from app.models.campaign import Campaign, CampaignBase
 from app.models.email_tracking import EmailTracking
 
@@ -42,6 +43,7 @@ class CampaignDashboardResult:
     campaign_code: str
     campaign_name: str
     client_name: str | None
+    client_code: str | None
     start_date: date | None
     end_date: date | None
     total_mail_sent: int
@@ -96,18 +98,21 @@ class CampaignService:
         end_date: date | None = None,
         file_name: str | None = None,
         client_name: str | None = None,
+        client_code: str | None = None,
         campaign_offer: str | None = None,
         created_at: datetime | None = None,
     ) -> Campaign:
         """Create one campaign, rejecting duplicate campaign codes."""
         clean_campaign_name = self._clean_required(campaign_name, "campaign_name")
         clean_campaign_code = self._clean_required(campaign_code, "campaign_code")
+        clean_client_code = self._clean_optional(client_code)
         self._validate_date_range(start_date, end_date)
         timestamp = self._as_utc(created_at or datetime.now(timezone.utc))
         session_factory = self._require_session_factory()
 
         try:
             with session_factory() as session:
+                self._validate_client_code(session, clean_client_code)
                 existing = session.scalar(
                     select(Campaign.id).where(
                         Campaign.campaign_code == clean_campaign_code
@@ -125,6 +130,7 @@ class CampaignService:
                     end_date=end_date,
                     file_name=file_name,
                     client_name=client_name,
+                    client_code=clean_client_code,
                     campaign_offer=campaign_offer,
                     created_at=timestamp,
                     updated_at=timestamp,
@@ -210,6 +216,7 @@ class CampaignService:
                         Campaign.campaign_code.label("campaign_code"),
                         Campaign.campaign_name.label("campaign_name"),
                         Campaign.client_name.label("client_name"),
+                        Campaign.client_code.label("client_code"),
                         Campaign.start_date.label("start_date"),
                         Campaign.end_date.label("end_date"),
                         func.count(EmailTracking.id).label("total_mail_sent"),
@@ -256,6 +263,7 @@ class CampaignService:
                         Campaign.campaign_code,
                         Campaign.campaign_name,
                         Campaign.client_name,
+                        Campaign.client_code,
                         Campaign.start_date,
                         Campaign.end_date,
                     )
@@ -300,18 +308,21 @@ class CampaignService:
         end_date: date | None = None,
         file_name: str | None = None,
         client_name: str | None = None,
+        client_code: str | None = None,
         campaign_offer: str | None = None,
         updated_at: datetime | None = None,
     ) -> Campaign:
         """Update one campaign while preserving created_at."""
         clean_campaign_name = self._clean_required(campaign_name, "campaign_name")
         clean_campaign_code = self._clean_required(campaign_code, "campaign_code")
+        clean_client_code = self._clean_optional(client_code)
         self._validate_date_range(start_date, end_date)
         timestamp = self._as_utc(updated_at or datetime.now(timezone.utc))
         session_factory = self._require_session_factory()
 
         try:
             with session_factory() as session:
+                self._validate_client_code(session, clean_client_code)
                 campaign = session.get(Campaign, campaign_id)
                 if campaign is None:
                     raise CampaignNotFoundError("Campaign not found.")
@@ -333,6 +344,7 @@ class CampaignService:
                 campaign.end_date = end_date
                 campaign.file_name = file_name
                 campaign.client_name = client_name
+                campaign.client_code = clean_client_code
                 campaign.campaign_offer = campaign_offer
                 campaign.updated_at = timestamp
                 session.commit()
@@ -393,6 +405,17 @@ class CampaignService:
         return cleaned or None
 
     @staticmethod
+    def _validate_client_code(session: Session, client_code: str | None) -> None:
+        """Ensure a supplied client_code exists in system_users.user_id."""
+        if client_code is None:
+            return
+        exists = session.scalar(
+            select(SystemUser.id).where(SystemUser.user_id == client_code)
+        )
+        if exists is None:
+            raise CampaignValidationError("client_code must exist in system_users.")
+
+    @staticmethod
     def _dashboard_result_from_row(row) -> CampaignDashboardResult:
         """Convert one aggregate row to a dashboard result."""
         total_mail_sent = int(row["total_mail_sent"] or 0)
@@ -411,6 +434,7 @@ class CampaignService:
             campaign_code=row["campaign_code"],
             campaign_name=row["campaign_name"],
             client_name=row["client_name"],
+            client_code=row["client_code"],
             start_date=row["start_date"],
             end_date=row["end_date"],
             total_mail_sent=total_mail_sent,

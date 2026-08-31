@@ -1,6 +1,6 @@
 """Tests for Version 2 independent campaign management APIs."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.api.campaign_routes as campaign_route_module
+from app.models.auth import AuthBase, SystemUser
 from app.models.campaign import Campaign, CampaignBase
 from app.models.email_tracking import Base, EmailTracking
 from app.services.campaigns import (
@@ -28,6 +29,7 @@ def build_campaign_service() -> tuple[CampaignService, sessionmaker]:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
+    AuthBase.metadata.create_all(engine)
     CampaignBase.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     service = CampaignService(None)
@@ -45,10 +47,18 @@ def campaign_payload(**overrides):
         "end_date": "2026-08-30",
         "file_name": "campaign.xlsx",
         "client_name": "ABC Client",
+        "client_code": None,
         "campaign_offer": "20% discount",
     }
     payload.update(overrides)
     return payload
+
+
+def add_system_user(session_factory: sessionmaker, user_id: str = "USER001") -> None:
+    """Create one system user for client-code validation."""
+    with session_factory() as session:
+        session.add(SystemUser(user_id=user_id, password="123456", role="CLIENT"))
+        session.commit()
 
 
 def test_campaigns_table_has_only_required_campaign_columns() -> None:
@@ -65,10 +75,45 @@ def test_campaigns_table_has_only_required_campaign_columns() -> None:
         "end_date",
         "file_name",
         "client_name",
+        "client_code",
         "campaign_offer",
         "created_at",
         "updated_at",
     }
+
+
+def test_client_code_migration_adds_campaigns_client_code(tmp_path) -> None:
+    from app.services.alembic_migrations import run_pending_migrations
+
+    database_path = tmp_path / "client-code-migration.db"
+    database_url = f"sqlite:///{database_path.as_posix()}"
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE email_tracking (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tracking_id VARCHAR(128) NOT NULL UNIQUE,
+                    recipient_email VARCHAR(320),
+                    sender_email VARCHAR(320),
+                    open_count INTEGER NOT NULL DEFAULT 0,
+                    click_count INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+    engine.dispose()
+
+    run_pending_migrations(database_url)
+
+    engine = create_engine(database_url)
+    columns = {column["name"] for column in inspect(engine).get_columns("campaigns")}
+    engine.dispose()
+
+    assert "client_code" in columns
 
 
 def test_create_campaign() -> None:
@@ -82,6 +127,7 @@ def test_create_campaign() -> None:
         end_date=date(2026, 8, 30),
         file_name="campaign.xlsx",
         client_name="ABC Client",
+        client_code=None,
         campaign_offer="20% discount",
         created_at=created_at,
     )
@@ -93,6 +139,7 @@ def test_create_campaign() -> None:
     assert campaign.end_date == date(2026, 8, 30)
     assert campaign.file_name == "campaign.xlsx"
     assert campaign.client_name == "ABC Client"
+    assert campaign.client_code is None
     assert campaign.campaign_offer == "20% discount"
 
 
@@ -110,6 +157,46 @@ def test_create_campaign_endpoint(
     assert body["success"] is True
     assert body["campaign"]["campaign_name"] == "Test Campaign"
     assert body["campaign"]["campaign_code"] == "C021"
+    assert body["campaign"]["client_code"] is None
+
+
+def test_create_campaign_saves_client_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER001")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/campaigns",
+        json=campaign_payload(client_code="USER001"),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["campaign"]["client_code"] == "USER001"
+    with session_factory() as session:
+        campaign = session.scalar(
+            select(Campaign).where(Campaign.campaign_code == "C021")
+        )
+    assert campaign is not None
+    assert campaign.client_code == "USER001"
+
+
+def test_create_campaign_rejects_invalid_client_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/campaigns",
+        json=campaign_payload(client_code="UNKNOWN"),
+    )
+
+    assert response.status_code == 400
 
 
 def test_missing_campaign_name_returns_validation_error(
@@ -298,6 +385,27 @@ def test_get_one_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 200
     assert response.json()["id"] == str(campaign.id)
     assert response.json()["campaign_code"] == "C021"
+    assert "client_code" in response.json()
+
+
+def test_get_campaign_apis_return_client_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER001")
+    campaign = service.create_campaign(
+        "Test Campaign",
+        "C021",
+        client_code="USER001",
+    )
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    list_response = client.get("/api/campaigns")
+    get_response = client.get(f"/api/campaigns/{campaign.id}")
+
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["client_code"] == "USER001"
+    assert get_response.status_code == 200
+    assert get_response.json()["client_code"] == "USER001"
 
 
 def test_campaign_codes_route_is_not_interpreted_as_campaign_uuid(
@@ -326,7 +434,7 @@ def test_campaign_dashboard_all_campaigns(
         client_name="Arifur Rahman",
     )
     service.create_campaign("Campaign Two", "C002")
-    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     with session_factory() as session:
         session.add_all(
             [
@@ -395,7 +503,7 @@ def test_campaign_dashboard_single_campaign_filter(
     service, session_factory = build_campaign_service()
     service.create_campaign("Campaign One", "C001")
     service.create_campaign("Campaign Two", "C002")
-    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     with session_factory() as session:
         session.add_all(
             [
@@ -443,28 +551,28 @@ def test_campaign_dashboard_monthly_and_weekly_sent_use_existing_rolling_windows
 ) -> None:
     service, session_factory = build_campaign_service()
     service.create_campaign("Campaign One", "C001")
-    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     with session_factory() as session:
         session.add_all(
             [
                 EmailTracking(
                     tracking_id="weekly",
                     campaign_code="C001",
-                    created_at=datetime(2026, 8, 20, 9, 30, tzinfo=timezone.utc),
+                    created_at=now - timedelta(days=3),
                     open_count=0,
                     click_count=0,
                 ),
                 EmailTracking(
                     tracking_id="monthly",
                     campaign_code="C001",
-                    created_at=datetime(2026, 8, 1, 9, 30, tzinfo=timezone.utc),
+                    created_at=now - timedelta(days=20),
                     open_count=0,
                     click_count=0,
                 ),
                 EmailTracking(
                     tracking_id="older",
                     campaign_code="C001",
-                    created_at=datetime(2026, 7, 1, 9, 30, tzinfo=timezone.utc),
+                    created_at=now - timedelta(days=50),
                     open_count=0,
                     click_count=0,
                 ),
@@ -526,7 +634,7 @@ def test_campaign_dashboard_multiple_campaigns_remain_isolated(
     service, session_factory = build_campaign_service()
     service.create_campaign("Campaign One", "C001")
     service.create_campaign("Campaign Two", "C002")
-    now = datetime(2026, 8, 24, 9, 30, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     with session_factory() as session:
         session.add_all(
             [
@@ -596,6 +704,7 @@ def test_unknown_campaign_id_returns_404(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_update_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
     service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER002")
     created_at = datetime(2026, 8, 19, 9, 30, tzinfo=timezone.utc)
     campaign = service.create_campaign("Old Campaign", "C020", created_at=created_at)
     monkeypatch.setattr(campaign_route_module, "campaign_service", service)
@@ -603,7 +712,11 @@ def test_update_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
 
     response = client.put(
         f"/api/campaigns/{campaign.id}",
-        json=campaign_payload(campaign_name="Updated Campaign", campaign_code="C021"),
+        json=campaign_payload(
+            campaign_name="Updated Campaign",
+            campaign_code="C021",
+            client_code="USER002",
+        ),
     )
 
     assert response.status_code == 200
@@ -611,10 +724,28 @@ def test_update_campaign(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["success"] is True
     assert body["campaign"]["campaign_name"] == "Updated Campaign"
     assert body["campaign"]["campaign_code"] == "C021"
+    assert body["campaign"]["client_code"] == "USER002"
     with session_factory() as session:
         updated = session.get(Campaign, campaign.id)
     assert updated is not None
     assert updated.created_at.replace(tzinfo=None) == created_at.replace(tzinfo=None)
+    assert updated.client_code == "USER002"
+
+
+def test_update_campaign_rejects_invalid_client_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    campaign = service.create_campaign("Old Campaign", "C020")
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.put(
+        f"/api/campaigns/{campaign.id}",
+        json=campaign_payload(client_code="UNKNOWN"),
+    )
+
+    assert response.status_code == 400
 
 
 def test_update_duplicate_campaign_code_returns_409(
@@ -699,6 +830,7 @@ def test_optional_fields_can_be_null(monkeypatch: pytest.MonkeyPatch) -> None:
             "end_date": None,
             "file_name": None,
             "client_name": None,
+            "client_code": None,
             "campaign_offer": None,
         },
     )
@@ -709,6 +841,7 @@ def test_optional_fields_can_be_null(monkeypatch: pytest.MonkeyPatch) -> None:
     assert campaign["end_date"] is None
     assert campaign["file_name"] is None
     assert campaign["client_name"] is None
+    assert campaign["client_code"] is None
     assert campaign["campaign_offer"] is None
 
 
@@ -780,6 +913,49 @@ def test_existing_tracking_data_remains_unchanged_after_campaign_crud() -> None:
         tracking_after.click_count,
     ) == before
     assert campaign_count == 0
+
+
+def test_existing_campaigns_remain_null_when_client_code_not_supplied() -> None:
+    service, session_factory = build_campaign_service()
+
+    campaign = service.create_campaign("Existing Campaign", "C021")
+
+    with session_factory() as session:
+        stored = session.get(Campaign, campaign.id)
+
+    assert stored is not None
+    assert stored.client_code is None
+
+
+def test_system_users_remain_unchanged_after_campaign_client_code_crud() -> None:
+    service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER001")
+    add_system_user(session_factory, "USER002")
+    with session_factory() as session:
+        before = [
+            (user.id, user.user_id, user.password, user.role)
+            for user in session.scalars(select(SystemUser)).all()
+        ]
+
+    campaign = service.create_campaign(
+        "Test Campaign",
+        "C021",
+        client_code="USER001",
+    )
+    service.update_campaign(
+        campaign.id,
+        "Updated Campaign",
+        "C022",
+        client_code="USER002",
+    )
+
+    with session_factory() as session:
+        after = [
+            (user.id, user.user_id, user.password, user.role)
+            for user in session.scalars(select(SystemUser)).all()
+        ]
+
+    assert after == before
 
 
 def test_service_unknown_campaign_errors_are_explicit() -> None:

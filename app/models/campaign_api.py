@@ -15,9 +15,10 @@ class CampaignPayload(BaseModel):
     end_date: date | None = None
     file_name: str | None = Field(default=None, max_length=500)
     client_name: str | None = Field(default=None, max_length=255)
+    client_code: str | None = Field(default=None, max_length=100)
     campaign_offer: str | None = None
 
-    @field_validator("file_name", "client_name", "campaign_offer")
+    @field_validator("file_name", "client_name", "client_code", "campaign_offer")
     @classmethod
     def optional_text_to_clean_or_none(cls, value: str | None) -> str | None:
         """Store optional whitespace-only strings as NULL-equivalent values."""
@@ -37,6 +38,7 @@ class CampaignResponse(BaseModel):
     end_date: date | None
     file_name: str | None
     client_name: str | None
+    client_code: str | None
     campaign_offer: str | None
     created_at: datetime
     updated_at: datetime
