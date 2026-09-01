@@ -951,6 +951,10 @@ class DatabaseTrackingService:
             conditions.append(EmailTracking.is_bounce == 1)
         elif filters.bounce is False:
             conditions.append(EmailTracking.is_bounce == 0)
+        if filters.unsubscribe is True:
+            conditions.append(EmailTracking.unsubscribe == 1)
+        elif filters.unsubscribe is False:
+            conditions.append(EmailTracking.unsubscribe == 0)
         if filters.is_reply:
             conditions.append(func.coalesce(EmailTracking.reply_count, 0) > 0)
         if filters.is_bounce:

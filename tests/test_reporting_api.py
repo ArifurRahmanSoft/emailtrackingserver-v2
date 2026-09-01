@@ -78,6 +78,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             download_count=0,
             reply_count=2,
             is_bounce=0,
+            unsubscribe=1,
         ),
         EmailTracking(
             tracking_id="alpha-click-download-bounce",
@@ -91,6 +92,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             download_count=4,
             reply_count=0,
             is_bounce=1,
+            unsubscribe=0,
         ),
         EmailTracking(
             tracking_id="beta-project",
@@ -104,6 +106,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             download_count=0,
             reply_count=0,
             is_bounce=0,
+            unsubscribe=0,
         ),
         EmailTracking(
             tracking_id="gamma-click",
@@ -117,6 +120,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             download_count=0,
             reply_count=0,
             is_bounce=0,
+            unsubscribe=1,
         ),
     ]
     with session_factory() as session:
@@ -486,12 +490,56 @@ def test_campaign_code_and_bounce_filters_work_together() -> None:
     assert result.items[0].tracking_id == "alpha-click-download-bounce"
 
 
+def test_unsubscribe_true_filter_returns_only_unsubscribed_records() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(unsubscribe="true")
+
+    assert result.total_records == 2
+    assert [item.tracking_id for item in result.items] == [
+        "alpha-open-reply",
+        "gamma-click",
+    ]
+
+
+def test_unsubscribe_false_filter_returns_only_subscribed_records() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(unsubscribe="false")
+
+    assert result.total_records == 2
+    assert [item.tracking_id for item in result.items] == [
+        "alpha-click-download-bounce",
+        "beta-project",
+    ]
+
+
+def test_campaign_code_and_unsubscribe_filters_work_together() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(campaign_code="PC014", unsubscribe="true")
+
+    assert result.total_records == 1
+    assert result.items[0].tracking_id == "alpha-open-reply"
+
+
 def test_invalid_bounce_filter_is_rejected() -> None:
     service, session_factory, _ = build_reporting_service()
     seed_filter_records(session_factory)
 
     with pytest.raises(ValueError, match="bounce must be true or false"):
         service.get_report(bounce="yes")
+
+
+def test_invalid_unsubscribe_filter_is_rejected() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    with pytest.raises(ValueError, match="Invalid unsubscribe filter value"):
+        service.get_report(unsubscribe="test")
 
 
 def test_false_boolean_filters_are_ignored() -> None:
@@ -628,6 +676,7 @@ def test_report_endpoint_returns_paginated_response(
             project_name: str | None = None,
             campaign_code: str | None = None,
             bounce: str | None = None,
+            unsubscribe: str | None = None,
             is_reply: bool = False,
             is_bounce: bool = False,
             is_open: bool = False,
@@ -642,6 +691,7 @@ def test_report_endpoint_returns_paginated_response(
             assert project_name is None
             assert campaign_code == "PC014"
             assert bounce == "false"
+            assert unsubscribe == "true"
             assert is_reply is True
             assert is_bounce is False
             assert is_open is False
@@ -685,6 +735,7 @@ def test_report_endpoint_returns_paginated_response(
             "sender_email": "sender@example.com",
             "campaign_code": "PC014",
             "bounce": "false",
+            "unsubscribe": "true",
             "is_reply": "true",
             "from_date": "2026-04-27",
         },
@@ -723,6 +774,15 @@ def test_report_endpoint_returns_http_400_for_invalid_bounce() -> None:
 
     assert response.status_code == 400
     assert response.json()["error"]["message"] == "bounce must be true or false."
+
+
+def test_report_endpoint_returns_http_400_for_invalid_unsubscribe() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/report", params={"unsubscribe": "test"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "Invalid unsubscribe filter value."
 
 
 def test_filter_options_normal_database_excludes_duplicates_and_blank_values() -> None:

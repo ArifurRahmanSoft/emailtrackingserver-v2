@@ -758,6 +758,13 @@ async def get_report(
         default=None,
         description="Bounce filter: true for bounced rows, false for non-bounced rows.",
     ),
+    unsubscribe: str | None = Query(
+        default=None,
+        description=(
+            "Unsubscribe filter: true for unsubscribed rows, "
+            "false for subscribed rows."
+        ),
+    ),
     is_reply: bool = Query(default=False, description="Only rows with replies."),
     is_bounce: bool = Query(default=False, description="Only bounced rows."),
     is_open: bool = Query(default=False, description="Only opened rows."),
@@ -781,6 +788,7 @@ async def get_report(
             project_name=project_name,
             campaign_code=campaign_code,
             bounce=bounce,
+            unsubscribe=unsubscribe,
             is_reply=is_reply,
             is_bounce=is_bounce,
             is_open=is_open,
@@ -797,6 +805,7 @@ async def get_report(
             project_name,
             campaign_code,
             bounce,
+            unsubscribe,
             is_reply,
             is_bounce,
             is_open,
@@ -808,11 +817,12 @@ async def get_report(
     except ReportFilterValidationError as exc:
         logger.warning(
             "Report request rejected: RequestedPage=%s RequestedPageSize=%s "
-            "campaign_code=%s bounce=%s from_date=%s to_date=%s Error=%s",
+            "campaign_code=%s bounce=%s unsubscribe=%s from_date=%s to_date=%s Error=%s",
             page,
             page_size,
             campaign_code,
             bounce,
+            unsubscribe,
             from_date,
             to_date,
             exc,

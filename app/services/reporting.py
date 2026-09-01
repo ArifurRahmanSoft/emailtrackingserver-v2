@@ -74,6 +74,7 @@ class ReportingService:
         project_name: str | None = None,
         campaign_code: str | None = None,
         bounce: str | None = None,
+        unsubscribe: str | None = None,
         is_reply: bool = False,
         is_bounce: bool = False,
         is_open: bool = False,
@@ -94,6 +95,7 @@ class ReportingService:
             project_name=project_name,
             campaign_code=campaign_code,
             bounce=bounce,
+            unsubscribe=unsubscribe,
             is_reply=is_reply,
             is_bounce=is_bounce,
             is_open=is_open,
@@ -129,6 +131,7 @@ class ReportingService:
         project_name: str | None = None,
         campaign_code: str | None = None,
         bounce: str | None = None,
+        unsubscribe: str | None = None,
         is_reply: bool = False,
         is_bounce: bool = False,
         is_open: bool = False,
@@ -142,6 +145,11 @@ class ReportingService:
         clean_project = project_name.strip() if project_name else None
         clean_campaign_code = campaign_code.strip() if campaign_code else None
         parsed_bounce = ReportingService._parse_optional_bool(bounce, "bounce")
+        parsed_unsubscribe = ReportingService._parse_optional_bool(
+            unsubscribe,
+            "unsubscribe",
+            invalid_message="Invalid unsubscribe filter value.",
+        )
         created_at_from_utc, created_at_to_utc = (
             ReportingService._bangladesh_date_filter_to_utc_range(
                 from_date=from_date,
@@ -153,6 +161,7 @@ class ReportingService:
             project_name=clean_project or None,
             campaign_code=clean_campaign_code or None,
             bounce=parsed_bounce,
+            unsubscribe=parsed_unsubscribe,
             is_reply=bool(is_reply),
             is_bounce=bool(is_bounce),
             is_open=bool(is_open),
@@ -163,7 +172,11 @@ class ReportingService:
         )
 
     @staticmethod
-    def _parse_optional_bool(value: str | None, field_name: str) -> bool | None:
+    def _parse_optional_bool(
+        value: str | None,
+        field_name: str,
+        invalid_message: str | None = None,
+    ) -> bool | None:
         """Parse optional strict true/false query values."""
         if value is None:
             return None
@@ -175,7 +188,9 @@ class ReportingService:
             return True
         if cleaned == "false":
             return False
-        raise ReportFilterValidationError(f"{field_name} must be true or false.")
+        raise ReportFilterValidationError(
+            invalid_message or f"{field_name} must be true or false."
+        )
 
     @staticmethod
     def _bangladesh_date_filter_to_utc_range(
