@@ -21,6 +21,10 @@ from app.api.auth_routes import (
     system_users_router,
 )
 from app.api.campaign_routes import campaign_service, router as campaign_router
+from app.api.client_report_routes import (
+    client_report_service,
+    router as client_report_router,
+)
 from app.api.attachment_routes import attachment_service, router as attachment_router
 from app.api.attachment_download_routes import router as attachment_download_router
 from app.api.attachment_mapping_routes import router as attachment_mapping_router
@@ -84,6 +88,7 @@ async def lifespan(_: FastAPI):
         ", ".join(settings.cors_allowed_origins),
     )
     yield
+    client_report_service.dispose()
     campaign_service.dispose()
     auth_service.dispose()
     attachment_service.dispose()
@@ -175,6 +180,7 @@ app.include_router(attachment_mapping_router)
 app.include_router(auth_router)
 app.include_router(system_users_router)
 app.include_router(campaign_router)
+app.include_router(client_report_router)
 
 
 @app.exception_handler(StarletteHTTPException)
