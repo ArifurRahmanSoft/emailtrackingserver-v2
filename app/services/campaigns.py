@@ -99,6 +99,24 @@ class CampaignProjectSenderResult:
     projects: list[dict[str, str | None]]
 
 
+@dataclass(frozen=True, slots=True)
+class ClientDropdownCampaignResult:
+    """One campaign dropdown option scoped by client code."""
+
+    campaign_code: str
+    campaign_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClientDropdownDataResult:
+    """Dropdown data scoped by one client code."""
+
+    client_code: str
+    campaigns: list[ClientDropdownCampaignResult]
+    projects: list[str]
+    sender_emails: list[str]
+
+
 class CampaignService:
     """CRUD service for the independent campaigns table."""
 
@@ -320,6 +338,76 @@ class CampaignService:
         except Exception as exc:
             raise CampaignDatabaseUnavailableError(
                 f"Unable to get campaign project senders: {exc}"
+            ) from exc
+
+    def get_client_dropdown_data(self, client_code: str) -> ClientDropdownDataResult:
+        """Return read-only dropdown data for campaigns owned by one client."""
+        clean_client_code = self._clean_required(client_code, "client_code")
+        session_factory = self._require_session_factory()
+        trimmed_project = func.trim(EmailTracking.project_name)
+        trimmed_sender = func.trim(EmailTracking.sender_email)
+
+        try:
+            with session_factory() as session:
+                campaign_rows = session.execute(
+                    select(Campaign.campaign_code, Campaign.campaign_name)
+                    .where(
+                        Campaign.client_code == clean_client_code,
+                        Campaign.campaign_code.is_not(None),
+                        func.trim(Campaign.campaign_code) != "",
+                    )
+                    .order_by(Campaign.campaign_code.asc())
+                ).all()
+                campaigns = [
+                    ClientDropdownCampaignResult(
+                        campaign_code=campaign_code,
+                        campaign_name=campaign_name,
+                    )
+                    for campaign_code, campaign_name in campaign_rows
+                ]
+                campaign_codes = [campaign.campaign_code for campaign in campaigns]
+
+                if not campaign_codes:
+                    return ClientDropdownDataResult(
+                        client_code=clean_client_code,
+                        campaigns=[],
+                        projects=[],
+                        sender_emails=[],
+                    )
+
+                projects = list(
+                    session.scalars(
+                        select(func.distinct(trimmed_project).label("value"))
+                        .where(
+                            EmailTracking.campaign_code.in_(campaign_codes),
+                            EmailTracking.project_name.is_not(None),
+                            trimmed_project != "",
+                        )
+                        .order_by(trimmed_project.asc())
+                    )
+                )
+                sender_emails = list(
+                    session.scalars(
+                        select(func.distinct(trimmed_sender).label("value"))
+                        .where(
+                            EmailTracking.campaign_code.in_(campaign_codes),
+                            EmailTracking.sender_email.is_not(None),
+                            trimmed_sender != "",
+                        )
+                        .order_by(trimmed_sender.asc())
+                    )
+                )
+                return ClientDropdownDataResult(
+                    client_code=clean_client_code,
+                    campaigns=campaigns,
+                    projects=[str(project) for project in projects],
+                    sender_emails=[str(sender) for sender in sender_emails],
+                )
+        except CampaignValidationError:
+            raise
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to get client dropdown data: {exc}"
             ) from exc
 
     def get_campaign_dashboard(

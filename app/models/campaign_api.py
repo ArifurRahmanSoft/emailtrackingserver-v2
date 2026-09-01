@@ -89,6 +89,23 @@ class CampaignProjectSendersResponse(BaseModel):
     projects: list[CampaignProjectSenderItem]
 
 
+class ClientDropdownCampaignItem(BaseModel):
+    """One campaign option available to a client."""
+
+    campaign_code: str
+    campaign_name: str
+
+
+class ClientDropdownDataResponse(BaseModel):
+    """Dropdown data scoped by one campaign client code."""
+
+    success: bool
+    client_code: str
+    campaigns: list[ClientDropdownCampaignItem]
+    projects: list[str]
+    sender_emails: list[str]
+
+
 class CampaignDashboardFilter(BaseModel):
     """Applied campaign dashboard filter values."""
 

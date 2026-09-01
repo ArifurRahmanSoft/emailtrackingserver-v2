@@ -21,6 +21,8 @@ from app.models.campaign_api import (
     CampaignProjectSendersResponse,
     CampaignResponse,
     ClientCampaignDashboardResponse,
+    ClientDropdownCampaignItem,
+    ClientDropdownDataResponse,
 )
 from app.services.campaigns import (
     CampaignDatabaseUnavailableError,
@@ -371,6 +373,94 @@ async def list_campaign_project_senders(
             )
             for project in result.projects
         ],
+    )
+
+
+@router.get(
+    "/client-dropdown-data",
+    response_model=ClientDropdownDataResponse,
+    summary="Get campaign, project, and sender dropdown data by client code",
+)
+async def get_client_dropdown_data(
+    request: Request,
+    client_code: str | None = None,
+) -> ClientDropdownDataResponse:
+    """Return dropdown values scoped by one campaign client code."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+    clean_client_code = client_code.strip() if client_code else None
+    if clean_client_code is None:
+        logger.warning(
+            "Client dropdown data rejected: client_ip=%s user_agent=%s "
+            "request_time=%s reason=missing_client_code",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client_code is required.",
+        )
+
+    try:
+        result = await run_in_threadpool(
+            campaign_service.get_client_dropdown_data,
+            clean_client_code,
+        )
+    except CampaignValidationError as exc:
+        logger.warning(
+            "Client dropdown data rejected: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Client dropdown data failed: client_code=%s client_ip=%s user_agent=%s "
+            "request_time=%s error=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Client dropdown data is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Client dropdown data requested: client_code=%s campaigns=%d projects=%d "
+        "sender_emails=%d client_ip=%s user_agent=%s request_time=%s",
+        result.client_code,
+        len(result.campaigns),
+        len(result.projects),
+        len(result.sender_emails),
+        client_ip,
+        user_agent,
+        request_time.isoformat(),
+    )
+    return ClientDropdownDataResponse(
+        success=True,
+        client_code=result.client_code,
+        campaigns=[
+            ClientDropdownCampaignItem(
+                campaign_code=campaign.campaign_code,
+                campaign_name=campaign.campaign_name,
+            )
+            for campaign in result.campaigns
+        ],
+        projects=result.projects,
+        sender_emails=result.sender_emails,
     )
 
 
