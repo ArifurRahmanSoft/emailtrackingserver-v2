@@ -12,6 +12,8 @@ class ReportFilters:
 
     sender_email: str | None = None
     project_name: str | None = None
+    campaign_code: str | None = None
+    bounce: bool | None = None
     is_reply: bool = False
     is_bounce: bool = False
     is_open: bool = False

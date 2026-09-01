@@ -72,6 +72,8 @@ class ReportingService:
         page_size: int = DEFAULT_PAGE_SIZE,
         sender_email: str | None = None,
         project_name: str | None = None,
+        campaign_code: str | None = None,
+        bounce: str | None = None,
         is_reply: bool = False,
         is_bounce: bool = False,
         is_open: bool = False,
@@ -90,6 +92,8 @@ class ReportingService:
         filters = self.build_filters(
             sender_email=sender_email,
             project_name=project_name,
+            campaign_code=campaign_code,
+            bounce=bounce,
             is_reply=is_reply,
             is_bounce=is_bounce,
             is_open=is_open,
@@ -123,6 +127,8 @@ class ReportingService:
     def build_filters(
         sender_email: str | None = None,
         project_name: str | None = None,
+        campaign_code: str | None = None,
+        bounce: str | None = None,
         is_reply: bool = False,
         is_bounce: bool = False,
         is_open: bool = False,
@@ -134,6 +140,8 @@ class ReportingService:
         """Normalize optional filter values while treating empty strings as absent."""
         clean_sender = sender_email.strip() if sender_email else None
         clean_project = project_name.strip() if project_name else None
+        clean_campaign_code = campaign_code.strip() if campaign_code else None
+        parsed_bounce = ReportingService._parse_optional_bool(bounce, "bounce")
         created_at_from_utc, created_at_to_utc = (
             ReportingService._bangladesh_date_filter_to_utc_range(
                 from_date=from_date,
@@ -143,6 +151,8 @@ class ReportingService:
         return ReportFilters(
             sender_email=clean_sender or None,
             project_name=clean_project or None,
+            campaign_code=clean_campaign_code or None,
+            bounce=parsed_bounce,
             is_reply=bool(is_reply),
             is_bounce=bool(is_bounce),
             is_open=bool(is_open),
@@ -151,6 +161,21 @@ class ReportingService:
             created_at_from_utc=created_at_from_utc,
             created_at_to_utc=created_at_to_utc,
         )
+
+    @staticmethod
+    def _parse_optional_bool(value: str | None, field_name: str) -> bool | None:
+        """Parse optional strict true/false query values."""
+        if value is None:
+            return None
+
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if cleaned == "true":
+            return True
+        if cleaned == "false":
+            return False
+        raise ReportFilterValidationError(f"{field_name} must be true or false.")
 
     @staticmethod
     def _bangladesh_date_filter_to_utc_range(

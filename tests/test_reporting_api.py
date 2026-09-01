@@ -71,6 +71,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             sender_email="alpha@example.com",
             recipient_email="receiver-alpha@example.com",
             project_name="PowerSoft",
+            campaign_code="PC014",
             created_at=base_time,
             open_count=5,
             click_count=0,
@@ -83,6 +84,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             sender_email="alpha@example.com",
             recipient_email="receiver-beta@example.com",
             project_name="PowerSoft",
+            campaign_code="PC014",
             created_at=base_time - timedelta(minutes=1),
             open_count=1,
             click_count=3,
@@ -95,6 +97,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             sender_email="beta@example.com",
             recipient_email="receiver-gamma@example.com",
             project_name="OtherProject",
+            campaign_code="PC015",
             created_at=base_time - timedelta(minutes=2),
             open_count=0,
             click_count=0,
@@ -107,6 +110,7 @@ def seed_filter_records(session_factory: sessionmaker) -> None:
             sender_email="gamma@example.com",
             recipient_email="receiver-delta@example.com",
             project_name="PowerSoft",
+            campaign_code="PC016",
             created_at=base_time - timedelta(minutes=3),
             open_count=0,
             click_count=1,
@@ -433,6 +437,63 @@ def test_is_download_filter() -> None:
     assert result.items[0].tracking_id == "alpha-click-download-bounce"
 
 
+def test_campaign_code_filter() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(campaign_code="PC014")
+
+    assert result.total_records == 2
+    assert [item.tracking_id for item in result.items] == [
+        "alpha-open-reply",
+        "alpha-click-download-bounce",
+    ]
+
+
+def test_bounce_true_filter_returns_only_bounced_records() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(bounce="true")
+
+    assert result.total_records == 1
+    assert result.items[0].tracking_id == "alpha-click-download-bounce"
+    assert result.items[0].is_bounce is True
+
+
+def test_bounce_false_filter_returns_only_non_bounced_records() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(bounce="false")
+
+    assert result.total_records == 3
+    assert [item.tracking_id for item in result.items] == [
+        "alpha-open-reply",
+        "beta-project",
+        "gamma-click",
+    ]
+    assert all(item.is_bounce is False for item in result.items)
+
+
+def test_campaign_code_and_bounce_filters_work_together() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    result = service.get_report(campaign_code="PC014", bounce="true")
+
+    assert result.total_records == 1
+    assert result.items[0].tracking_id == "alpha-click-download-bounce"
+
+
+def test_invalid_bounce_filter_is_rejected() -> None:
+    service, session_factory, _ = build_reporting_service()
+    seed_filter_records(session_factory)
+
+    with pytest.raises(ValueError, match="bounce must be true or false"):
+        service.get_report(bounce="yes")
+
+
 def test_false_boolean_filters_are_ignored() -> None:
     service, session_factory, _ = build_reporting_service()
     seed_filter_records(session_factory)
@@ -452,7 +513,7 @@ def test_empty_string_filters_are_ignored() -> None:
     service, session_factory, _ = build_reporting_service()
     seed_filter_records(session_factory)
 
-    result = service.get_report(sender_email="  ", project_name="")
+    result = service.get_report(sender_email="  ", project_name="", campaign_code=" ")
 
     assert result.total_records == 4
 
@@ -565,6 +626,8 @@ def test_report_endpoint_returns_paginated_response(
             page_size: int,
             sender_email: str | None = None,
             project_name: str | None = None,
+            campaign_code: str | None = None,
+            bounce: str | None = None,
             is_reply: bool = False,
             is_bounce: bool = False,
             is_open: bool = False,
@@ -577,6 +640,8 @@ def test_report_endpoint_returns_paginated_response(
             assert page_size == 5
             assert sender_email == "sender@example.com"
             assert project_name is None
+            assert campaign_code == "PC014"
+            assert bounce == "false"
             assert is_reply is True
             assert is_bounce is False
             assert is_open is False
@@ -618,6 +683,8 @@ def test_report_endpoint_returns_paginated_response(
             "page": 2,
             "page_size": 5,
             "sender_email": "sender@example.com",
+            "campaign_code": "PC014",
+            "bounce": "false",
             "is_reply": "true",
             "from_date": "2026-04-27",
         },
@@ -647,6 +714,15 @@ def test_report_endpoint_returns_http_400_when_to_date_is_before_from_date() -> 
     )
 
     assert response.status_code == 400
+
+
+def test_report_endpoint_returns_http_400_for_invalid_bounce() -> None:
+    client = TestClient(app)
+
+    response = client.get("/api/report", params={"bounce": "yes"})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "bounce must be true or false."
 
 
 def test_filter_options_normal_database_excludes_duplicates_and_blank_values() -> None:

@@ -753,6 +753,11 @@ async def get_report(
     page_size: int = Query(default=20, description="Rows per page, maximum 100."),
     sender_email: str | None = Query(default=None, description="Exact sender email."),
     project_name: str | None = Query(default=None, description="Exact project name."),
+    campaign_code: str | None = Query(default=None, description="Exact campaign code."),
+    bounce: str | None = Query(
+        default=None,
+        description="Bounce filter: true for bounced rows, false for non-bounced rows.",
+    ),
     is_reply: bool = Query(default=False, description="Only rows with replies."),
     is_bounce: bool = Query(default=False, description="Only bounced rows."),
     is_open: bool = Query(default=False, description="Only opened rows."),
@@ -774,6 +779,8 @@ async def get_report(
         filters = ReportingService.build_filters(
             sender_email=sender_email,
             project_name=project_name,
+            campaign_code=campaign_code,
+            bounce=bounce,
             is_reply=is_reply,
             is_bounce=is_bounce,
             is_open=is_open,
@@ -788,6 +795,8 @@ async def get_report(
             page_size,
             sender_email,
             project_name,
+            campaign_code,
+            bounce,
             is_reply,
             is_bounce,
             is_open,
@@ -799,9 +808,11 @@ async def get_report(
     except ReportFilterValidationError as exc:
         logger.warning(
             "Report request rejected: RequestedPage=%s RequestedPageSize=%s "
-            "from_date=%s to_date=%s Error=%s",
+            "campaign_code=%s bounce=%s from_date=%s to_date=%s Error=%s",
             page,
             page_size,
+            campaign_code,
+            bounce,
             from_date,
             to_date,
             exc,

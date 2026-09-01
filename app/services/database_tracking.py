@@ -945,6 +945,12 @@ class DatabaseTrackingService:
             conditions.append(EmailTracking.sender_email == filters.sender_email)
         if filters.project_name:
             conditions.append(EmailTracking.project_name == filters.project_name)
+        if filters.campaign_code:
+            conditions.append(EmailTracking.campaign_code == filters.campaign_code)
+        if filters.bounce is True:
+            conditions.append(EmailTracking.is_bounce == 1)
+        elif filters.bounce is False:
+            conditions.append(EmailTracking.is_bounce == 0)
         if filters.is_reply:
             conditions.append(func.coalesce(EmailTracking.reply_count, 0) > 0)
         if filters.is_bounce:
