@@ -422,6 +422,211 @@ def test_campaign_codes_route_is_not_interpreted_as_campaign_uuid(
     assert response.json()["campaign_codes"] == ["C021"]
 
 
+def test_campaign_client_info_valid_client_code_returns_client_code_and_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER001")
+    service.create_campaign(
+        "Client Campaign",
+        "PC014",
+        client_name="ABC Client",
+        client_code="USER001",
+    )
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/client-info?client_code=USER001")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "client_code": "USER001",
+        "client_name": "ABC Client",
+    }
+
+
+def test_campaign_client_info_multiple_campaigns_return_one_client_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    add_system_user(session_factory, "USER001")
+    service.create_campaign(
+        "Client Campaign One",
+        "PC014",
+        client_name="ABC Client",
+        client_code="USER001",
+    )
+    service.create_campaign(
+        "Client Campaign Two",
+        "PC015",
+        client_name="ABC Client",
+        client_code="USER001",
+    )
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/client-info?client_code=USER001")
+
+    assert response.status_code == 200
+    assert response.json()["client_code"] == "USER001"
+    assert response.json()["client_name"] == "ABC Client"
+
+
+def test_campaign_client_info_unknown_client_code_returns_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/client-info?client_code=UNKNOWN")
+
+    assert response.status_code == 404
+
+
+def test_campaign_project_senders_valid_campaign_codes_return_projects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign 14", "PC014")
+    service.create_campaign("Campaign 15", "PC015")
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="pc014-row-1",
+                    campaign_code="PC014",
+                    sender_email="sales@example.com",
+                    project_name="Project A",
+                ),
+                EmailTracking(
+                    tracking_id="pc015-row-1",
+                    campaign_code="PC015",
+                    sender_email="admin@example.com",
+                    project_name="Project B",
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/campaigns/project-senders?campaign_codes=PC014,PC015"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "campaign_codes": ["PC014", "PC015"],
+        "projects": [
+            {"sender_email": "admin@example.com", "project_name": "Project B"},
+            {"sender_email": "sales@example.com", "project_name": "Project A"},
+        ],
+    }
+
+
+def test_campaign_project_senders_duplicate_tracking_rows_are_unique(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Campaign 14", "PC014")
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="duplicate-1",
+                    campaign_code="PC014",
+                    sender_email="a@example.com",
+                    project_name="Project A",
+                ),
+                EmailTracking(
+                    tracking_id="duplicate-2",
+                    campaign_code="PC014",
+                    sender_email="a@example.com",
+                    project_name="Project A",
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/project-senders?campaign_codes=PC014")
+
+    assert response.status_code == 200
+    assert response.json()["projects"] == [
+        {"sender_email": "a@example.com", "project_name": "Project A"}
+    ]
+
+
+def test_campaign_project_senders_invalid_campaign_code_returns_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/project-senders?campaign_codes=UNKNOWN")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "campaign_codes": [],
+        "projects": [],
+    }
+
+
+def test_campaign_project_senders_missing_campaign_codes_returns_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _ = build_campaign_service()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/project-senders")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "campaign_codes is required."
+
+
+def test_campaign_project_senders_exposes_only_requested_valid_campaigns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, session_factory = build_campaign_service()
+    service.create_campaign("Requested Campaign", "PC014")
+    service.create_campaign("Private Campaign", "PC999")
+    with session_factory() as session:
+        session.add_all(
+            [
+                EmailTracking(
+                    tracking_id="requested-row",
+                    campaign_code="PC014",
+                    sender_email="visible@example.com",
+                    project_name="Visible Project",
+                ),
+                EmailTracking(
+                    tracking_id="private-row",
+                    campaign_code="PC999",
+                    sender_email="private@example.com",
+                    project_name="Private Project",
+                ),
+            ]
+        )
+        session.commit()
+    monkeypatch.setattr(campaign_route_module, "campaign_service", service)
+    client = TestClient(app)
+
+    response = client.get("/api/campaigns/project-senders?campaign_codes=PC014")
+
+    assert response.status_code == 200
+    assert response.json()["campaign_codes"] == ["PC014"]
+    assert response.json()["projects"] == [
+        {"sender_email": "visible@example.com", "project_name": "Visible Project"}
+    ]
+
+
 def test_campaign_dashboard_all_campaigns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

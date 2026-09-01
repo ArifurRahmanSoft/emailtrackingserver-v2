@@ -66,6 +66,29 @@ class CampaignCodeListResponse(BaseModel):
     campaign_codes: list[str]
 
 
+class CampaignClientInfoResponse(BaseModel):
+    """Read-only client information resolved from campaigns."""
+
+    success: bool
+    client_code: str
+    client_name: str | None
+
+
+class CampaignProjectSenderItem(BaseModel):
+    """One unique sender/project combination for campaign reports."""
+
+    sender_email: str | None
+    project_name: str | None
+
+
+class CampaignProjectSendersResponse(BaseModel):
+    """Read-only sender/project options resolved from campaign tracking rows."""
+
+    success: bool
+    campaign_codes: list[str]
+    projects: list[CampaignProjectSenderItem]
+
+
 class CampaignDashboardFilter(BaseModel):
     """Applied campaign dashboard filter values."""
 

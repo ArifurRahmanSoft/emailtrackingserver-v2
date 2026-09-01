@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.models.campaign import Campaign
 from app.models.campaign_api import (
+    CampaignClientInfoResponse,
     CampaignCodeListResponse,
     CampaignDashboardFilter,
     CampaignDashboardItem,
@@ -16,6 +17,8 @@ from app.models.campaign_api import (
     CampaignDeleteResponse,
     CampaignMutationResponse,
     CampaignPayload,
+    CampaignProjectSenderItem,
+    CampaignProjectSendersResponse,
     CampaignResponse,
     ClientCampaignDashboardResponse,
 )
@@ -193,6 +196,182 @@ async def list_campaign_codes(request: Request) -> CampaignCodeListResponse:
         request_time.isoformat(),
     )
     return CampaignCodeListResponse(success=True, campaign_codes=campaign_codes)
+
+
+@router.get(
+    "/client-info",
+    response_model=CampaignClientInfoResponse,
+    summary="Get client information by client code",
+)
+async def get_client_info(
+    request: Request,
+    client_code: str | None = None,
+) -> CampaignClientInfoResponse:
+    """Return unique client information from existing campaign records."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+    clean_client_code = client_code.strip() if client_code else None
+    if clean_client_code is None:
+        logger.warning(
+            "Campaign client info rejected: client_ip=%s user_agent=%s "
+            "request_time=%s reason=missing_client_code",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client_code is required.",
+        )
+
+    try:
+        result = await run_in_threadpool(
+            campaign_service.get_client_info,
+            clean_client_code,
+        )
+    except CampaignValidationError as exc:
+        logger.warning(
+            "Campaign client info rejected: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Campaign client info failed: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s error=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Client information is temporarily unavailable.",
+        ) from exc
+
+    if result is None:
+        logger.warning(
+            "Campaign client info rejected: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=not_found",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client code not found.",
+        )
+
+    logger.info(
+        "Campaign client info requested: client_code=%s client_name=%s "
+        "client_ip=%s user_agent=%s request_time=%s",
+        result.client_code,
+        result.client_name,
+        client_ip,
+        user_agent,
+        request_time.isoformat(),
+    )
+    return CampaignClientInfoResponse(
+        success=True,
+        client_code=result.client_code,
+        client_name=result.client_name,
+    )
+
+
+@router.get(
+    "/project-senders",
+    response_model=CampaignProjectSendersResponse,
+    summary="List sender/project pairs by campaign codes",
+)
+async def list_campaign_project_senders(
+    request: Request,
+    campaign_codes: str | None = None,
+) -> CampaignProjectSendersResponse:
+    """Return unique sender/project pairs for valid campaign codes."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+    if campaign_codes is None or not campaign_codes.strip():
+        logger.warning(
+            "Campaign project senders rejected: client_ip=%s user_agent=%s "
+            "request_time=%s reason=missing_campaign_codes",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="campaign_codes is required.",
+        )
+
+    try:
+        result = await run_in_threadpool(
+            campaign_service.get_project_senders,
+            campaign_codes,
+        )
+    except CampaignValidationError as exc:
+        logger.warning(
+            "Campaign project senders rejected: campaign_codes=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=%s",
+            campaign_codes,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Campaign project senders failed: campaign_codes=%s client_ip=%s "
+            "user_agent=%s request_time=%s error=%s",
+            campaign_codes,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Campaign project senders are temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Campaign project senders requested: campaign_codes=%s valid_campaigns=%d "
+        "returned_projects=%d client_ip=%s user_agent=%s request_time=%s",
+        campaign_codes,
+        len(result.campaign_codes),
+        len(result.projects),
+        client_ip,
+        user_agent,
+        request_time.isoformat(),
+    )
+    return CampaignProjectSendersResponse(
+        success=True,
+        campaign_codes=result.campaign_codes,
+        projects=[
+            CampaignProjectSenderItem(
+                sender_email=project["sender_email"],
+                project_name=project["project_name"],
+            )
+            for project in result.projects
+        ],
+    )
 
 
 @router.get(

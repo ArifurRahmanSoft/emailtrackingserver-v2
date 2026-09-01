@@ -83,6 +83,22 @@ class ClientCampaignDashboardResult:
     last_updated: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class CampaignClientInfoResult:
+    """Unique client information resolved from campaign records."""
+
+    client_code: str
+    client_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CampaignProjectSenderResult:
+    """Read-only sender/project options for selected campaigns."""
+
+    campaign_codes: list[str]
+    projects: list[dict[str, str | None]]
+
+
 class CampaignService:
     """CRUD service for the independent campaigns table."""
 
@@ -210,6 +226,100 @@ class CampaignService:
         except Exception as exc:
             raise CampaignDatabaseUnavailableError(
                 f"Unable to list campaign codes: {exc}"
+            ) from exc
+
+    def get_client_info(self, client_code: str) -> CampaignClientInfoResult | None:
+        """Return one client_code/client_name pair from existing campaign rows."""
+        clean_client_code = self._clean_required(client_code, "client_code")
+        session_factory = self._require_session_factory()
+        trimmed_client_name = func.trim(Campaign.client_name)
+
+        try:
+            with session_factory() as session:
+                campaign_exists = session.scalar(
+                    select(Campaign.id)
+                    .where(Campaign.client_code == clean_client_code)
+                    .limit(1)
+                )
+                if campaign_exists is None:
+                    return None
+
+                client_name = session.scalar(
+                    select(func.distinct(trimmed_client_name))
+                    .where(
+                        Campaign.client_code == clean_client_code,
+                        Campaign.client_name.is_not(None),
+                        trimmed_client_name != "",
+                    )
+                    .order_by(trimmed_client_name.asc())
+                    .limit(1)
+                )
+                return CampaignClientInfoResult(
+                    client_code=clean_client_code,
+                    client_name=str(client_name) if client_name is not None else None,
+                )
+        except CampaignValidationError:
+            raise
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to get client info: {exc}"
+            ) from exc
+
+    def get_project_senders(
+        self,
+        campaign_codes: str,
+    ) -> CampaignProjectSenderResult:
+        """Return unique sender/project pairs for valid selected campaign codes."""
+        requested_codes = self._parse_campaign_code_list(campaign_codes)
+        session_factory = self._require_session_factory()
+        trimmed_sender = func.trim(EmailTracking.sender_email)
+        trimmed_project = func.trim(EmailTracking.project_name)
+
+        try:
+            with session_factory() as session:
+                valid_codes = list(
+                    session.scalars(
+                        select(Campaign.campaign_code)
+                        .where(Campaign.campaign_code.in_(requested_codes))
+                        .order_by(Campaign.campaign_code.asc())
+                    )
+                )
+                if not valid_codes:
+                    return CampaignProjectSenderResult(
+                        campaign_codes=[],
+                        projects=[],
+                    )
+
+                rows = session.execute(
+                    select(
+                        trimmed_sender.label("sender_email"),
+                        trimmed_project.label("project_name"),
+                    )
+                    .where(
+                        EmailTracking.campaign_code.in_(valid_codes),
+                        EmailTracking.sender_email.is_not(None),
+                        EmailTracking.project_name.is_not(None),
+                        trimmed_sender != "",
+                        trimmed_project != "",
+                    )
+                    .distinct()
+                    .order_by(trimmed_sender.asc(), trimmed_project.asc())
+                ).mappings()
+                return CampaignProjectSenderResult(
+                    campaign_codes=valid_codes,
+                    projects=[
+                        {
+                            "sender_email": row["sender_email"],
+                            "project_name": row["project_name"],
+                        }
+                        for row in rows
+                    ],
+                )
+        except CampaignValidationError:
+            raise
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to get campaign project senders: {exc}"
             ) from exc
 
     def get_campaign_dashboard(
@@ -573,6 +683,18 @@ class CampaignService:
         )
         if exists is None:
             raise CampaignValidationError("client_code must exist in system_users.")
+
+    @staticmethod
+    def _parse_campaign_code_list(campaign_codes: str) -> list[str]:
+        """Parse comma-separated campaign codes, rejecting empty requests."""
+        parsed_codes = [
+            code.strip()
+            for code in campaign_codes.split(",")
+            if code.strip()
+        ]
+        if not parsed_codes:
+            raise CampaignValidationError("campaign_codes is required.")
+        return list(dict.fromkeys(parsed_codes))
 
     @staticmethod
     def _dashboard_result_from_row(row) -> CampaignDashboardResult:
