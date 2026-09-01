@@ -17,6 +17,7 @@ from app.models.campaign_api import (
     CampaignMutationResponse,
     CampaignPayload,
     CampaignResponse,
+    ClientCampaignDashboardResponse,
 )
 from app.services.campaigns import (
     CampaignDatabaseUnavailableError,
@@ -260,6 +261,104 @@ async def get_campaign_dashboard(
             dashboard_rows,
             include_total=clean_campaign_code is None,
         ),
+    )
+
+
+@router.get(
+    "/client-dashboard",
+    response_model=ClientCampaignDashboardResponse,
+    summary="Client-wise campaign dashboard metrics",
+)
+async def get_client_campaign_dashboard(
+    request: Request,
+    client_code: str | None = None,
+) -> ClientCampaignDashboardResponse:
+    """Return aggregate tracking metrics for campaigns owned by one client code."""
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    request_time = datetime.now(timezone.utc)
+    clean_client_code = client_code.strip() if client_code else None
+    if clean_client_code is None:
+        logger.warning(
+            "Client campaign dashboard rejected: client_ip=%s user_agent=%s "
+            "request_time=%s reason=missing_client_code",
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client_code is required.",
+        )
+
+    try:
+        result = await run_in_threadpool(
+            campaign_service.get_client_dashboard,
+            clean_client_code,
+            request_time,
+        )
+    except CampaignValidationError as exc:
+        logger.warning(
+            "Client campaign dashboard rejected: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s reason=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except CampaignDatabaseUnavailableError as exc:
+        logger.error(
+            "Client campaign dashboard failed: client_code=%s client_ip=%s "
+            "user_agent=%s request_time=%s error=%s",
+            clean_client_code,
+            client_ip,
+            user_agent,
+            request_time.isoformat(),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Client campaign dashboard is temporarily unavailable.",
+        ) from exc
+
+    logger.info(
+        "Client campaign dashboard requested: client_code=%s client_ip=%s "
+        "user_agent=%s campaign_count=%d total_sent=%d request_time=%s",
+        result.client_code,
+        client_ip,
+        user_agent,
+        result.campaign_count,
+        result.total_sent,
+        request_time.isoformat(),
+    )
+    return ClientCampaignDashboardResponse(
+        success=True,
+        client_code=result.client_code,
+        campaign_count=result.campaign_count,
+        campaign_codes=result.campaign_codes,
+        total_sent=result.total_sent,
+        total_open=result.total_open,
+        total_click=result.total_click,
+        total_download=result.total_download,
+        total_reply=result.total_reply,
+        total_bounce=result.total_bounce,
+        total_open_by_mail=result.total_open_by_mail,
+        total_click_by_mail=result.total_click_by_mail,
+        total_download_by_mail=result.total_download_by_mail,
+        total_reply_by_mail=result.total_reply_by_mail,
+        weekly_sent=result.weekly_sent,
+        monthly_sent=result.monthly_sent,
+        success_rate=result.success_rate,
+        failure_rate=result.failure_rate,
+        total_unsubscribe=result.total_unsubscribe,
+        last_unsubscribe_time=result.last_unsubscribe_time,
+        last_updated=result.last_updated,
     )
 
 

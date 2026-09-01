@@ -98,3 +98,29 @@ class CampaignDashboardResponse(BaseModel):
     success: bool
     filter: CampaignDashboardFilter
     campaigns: list[CampaignDashboardItem]
+
+
+class ClientCampaignDashboardResponse(BaseModel):
+    """Aggregated campaign dashboard metrics for one client code."""
+
+    success: bool
+    client_code: str
+    campaign_count: int
+    campaign_codes: list[str]
+    total_sent: int
+    total_open: int
+    total_click: int
+    total_download: int
+    total_reply: int
+    total_bounce: int
+    total_open_by_mail: int
+    total_click_by_mail: int
+    total_download_by_mail: int
+    total_reply_by_mail: int
+    weekly_sent: int
+    monthly_sent: int
+    success_rate: float
+    failure_rate: float
+    total_unsubscribe: int
+    last_unsubscribe_time: datetime | None
+    last_updated: datetime

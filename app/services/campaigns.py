@@ -57,6 +57,32 @@ class CampaignDashboardResult:
     weekly_sent: int
 
 
+@dataclass(frozen=True, slots=True)
+class ClientCampaignDashboardResult:
+    """Aggregated dashboard metrics for all campaigns owned by one client."""
+
+    client_code: str
+    campaign_count: int
+    campaign_codes: list[str]
+    total_sent: int
+    total_open: int
+    total_click: int
+    total_download: int
+    total_reply: int
+    total_bounce: int
+    total_open_by_mail: int
+    total_click_by_mail: int
+    total_download_by_mail: int
+    total_reply_by_mail: int
+    weekly_sent: int
+    monthly_sent: int
+    success_rate: float
+    failure_rate: float
+    total_unsubscribe: int
+    last_unsubscribe_time: datetime | None
+    last_updated: datetime
+
+
 class CampaignService:
     """CRUD service for the independent campaigns table."""
 
@@ -283,6 +309,139 @@ class CampaignService:
                 f"Unable to build campaign dashboard: {exc}"
             ) from exc
 
+    def get_client_dashboard(
+        self,
+        client_code: str,
+        generated_at: datetime | None = None,
+    ) -> ClientCampaignDashboardResult:
+        """Return read-only dashboard totals for campaigns under one client code."""
+        clean_client_code = self._clean_required(client_code, "client_code")
+        session_factory = self._require_session_factory()
+        timestamp = self._as_utc(generated_at or datetime.now(timezone.utc))
+        weekly_threshold = timestamp - timedelta(days=7)
+        monthly_threshold = timestamp - timedelta(days=30)
+
+        try:
+            with session_factory() as session:
+                campaign_codes = list(
+                    session.scalars(
+                        select(Campaign.campaign_code)
+                        .where(
+                            Campaign.client_code == clean_client_code,
+                            Campaign.campaign_code.is_not(None),
+                            func.trim(Campaign.campaign_code) != "",
+                        )
+                        .order_by(Campaign.campaign_code.asc())
+                    )
+                )
+
+                if not campaign_codes:
+                    return self._empty_client_dashboard_result(
+                        clean_client_code,
+                        timestamp,
+                    )
+
+                statement = select(
+                    func.count(EmailTracking.id).label("total_sent"),
+                    func.coalesce(func.sum(EmailTracking.open_count), 0).label(
+                        "total_open"
+                    ),
+                    func.coalesce(func.sum(EmailTracking.click_count), 0).label(
+                        "total_click"
+                    ),
+                    func.coalesce(func.sum(EmailTracking.download_count), 0).label(
+                        "total_download"
+                    ),
+                    func.coalesce(func.sum(EmailTracking.reply_count), 0).label(
+                        "total_reply"
+                    ),
+                    func.coalesce(
+                        func.sum(case((EmailTracking.is_bounce == 1, 1), else_=0)),
+                        0,
+                    ).label("total_bounce"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (func.coalesce(EmailTracking.open_count, 0) > 0, 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("total_open_by_mail"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (func.coalesce(EmailTracking.click_count, 0) > 0, 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("total_click_by_mail"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (
+                                    func.coalesce(EmailTracking.download_count, 0) > 0,
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("total_download_by_mail"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (func.coalesce(EmailTracking.reply_count, 0) > 0, 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("total_reply_by_mail"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (EmailTracking.created_at >= weekly_threshold, 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("weekly_sent"),
+                    func.coalesce(
+                        func.sum(
+                            case(
+                                (EmailTracking.created_at >= monthly_threshold, 1),
+                                else_=0,
+                            )
+                        ),
+                        0,
+                    ).label("monthly_sent"),
+                    func.coalesce(
+                        func.sum(case((EmailTracking.unsubscribe == 1, 1), else_=0)),
+                        0,
+                    ).label("total_unsubscribe"),
+                    func.max(
+                        case(
+                            (EmailTracking.unsubscribe == 1, EmailTracking.unsubscribe_time),
+                            else_=None,
+                        )
+                    ).label("last_unsubscribe_time"),
+                ).where(EmailTracking.campaign_code.in_(campaign_codes))
+
+                row = session.execute(statement).mappings().one()
+                return self._client_dashboard_result_from_row(
+                    clean_client_code,
+                    campaign_codes,
+                    row,
+                    timestamp,
+                )
+        except CampaignValidationError:
+            raise
+        except Exception as exc:
+            raise CampaignDatabaseUnavailableError(
+                f"Unable to build client campaign dashboard: {exc}"
+            ) from exc
+
     def get_campaign(self, campaign_id: UUID) -> Campaign:
         """Return one campaign by UUID."""
         session_factory = self._require_session_factory()
@@ -446,6 +605,77 @@ class CampaignService:
             failure_rate=failure_rate,
             monthly_sent=int(row["monthly_sent"] or 0),
             weekly_sent=int(row["weekly_sent"] or 0),
+        )
+
+    @classmethod
+    def _empty_client_dashboard_result(
+        cls,
+        client_code: str,
+        timestamp: datetime,
+    ) -> ClientCampaignDashboardResult:
+        """Return the successful zero-metric shape for clients without campaigns."""
+        return ClientCampaignDashboardResult(
+            client_code=client_code,
+            campaign_count=0,
+            campaign_codes=[],
+            total_sent=0,
+            total_open=0,
+            total_click=0,
+            total_download=0,
+            total_reply=0,
+            total_bounce=0,
+            total_open_by_mail=0,
+            total_click_by_mail=0,
+            total_download_by_mail=0,
+            total_reply_by_mail=0,
+            weekly_sent=0,
+            monthly_sent=0,
+            success_rate=0.0,
+            failure_rate=0.0,
+            total_unsubscribe=0,
+            last_unsubscribe_time=None,
+            last_updated=timestamp,
+        )
+
+    @classmethod
+    def _client_dashboard_result_from_row(
+        cls,
+        client_code: str,
+        campaign_codes: list[str],
+        row,
+        timestamp: datetime,
+    ) -> ClientCampaignDashboardResult:
+        """Convert one aggregate row to the client dashboard response result."""
+        total_sent = int(row["total_sent"] or 0)
+        total_bounce = int(row["total_bounce"] or 0)
+        if total_sent == 0:
+            success_rate = 0.0
+            failure_rate = 0.0
+        else:
+            success_rate = round(((total_sent - total_bounce) / total_sent) * 100, 2)
+            failure_rate = round((total_bounce / total_sent) * 100, 2)
+
+        return ClientCampaignDashboardResult(
+            client_code=client_code,
+            campaign_count=len(campaign_codes),
+            campaign_codes=campaign_codes,
+            total_sent=total_sent,
+            total_open=int(row["total_open"] or 0),
+            total_click=int(row["total_click"] or 0),
+            total_download=int(row["total_download"] or 0),
+            total_reply=int(row["total_reply"] or 0),
+            total_bounce=total_bounce,
+            total_open_by_mail=int(row["total_open_by_mail"] or 0),
+            total_click_by_mail=int(row["total_click_by_mail"] or 0),
+            total_download_by_mail=int(row["total_download_by_mail"] or 0),
+            total_reply_by_mail=int(row["total_reply_by_mail"] or 0),
+            weekly_sent=int(row["weekly_sent"] or 0),
+            monthly_sent=int(row["monthly_sent"] or 0),
+            success_rate=success_rate,
+            failure_rate=failure_rate,
+            total_unsubscribe=int(row["total_unsubscribe"] or 0),
+            last_unsubscribe_time=row["last_unsubscribe_time"],
+            last_updated=timestamp,
         )
 
     @staticmethod
