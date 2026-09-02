@@ -83,5 +83,5 @@ def test_cors_origins_do_not_allow_wildcard(monkeypatch):
     assert "*" not in settings.cors_allowed_origins
     assert settings.cors_allowed_origins == (
         "http://localhost:4200",
-        "http://127.0.0.1:4200","https://emailautomationreporting.netlify.app"
+        "http://127.0.0.1:4200","https://emailautomationreporting.netlify.app,https://outreach.powersalesautomation.com"
     )
