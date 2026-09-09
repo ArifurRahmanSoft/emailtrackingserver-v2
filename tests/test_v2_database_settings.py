@@ -72,7 +72,11 @@ def test_cors_origins_support_comma_separated_environment_values(monkeypatch):
 
     assert settings.cors_allowed_origins == (
         "http://localhost:4200",
+<<<<<<< HEAD
         "https://angular-v2.example.com","https://emailautomationreporting.netlify.app","https://outreach.powersalesautomation.com"
+=======
+        "https://angular-v2.example.com","https://emailautomationreporting.netlify.app,https://outreach.powersalesautomation.com"
+>>>>>>> 184cc5c060a7a7cfdb11fe76dd3da5048fec4be9
     )
 
 
@@ -84,5 +88,9 @@ def test_cors_origins_do_not_allow_wildcard(monkeypatch):
     assert "*" not in settings.cors_allowed_origins
     assert settings.cors_allowed_origins == (
         "http://localhost:4200",
+<<<<<<< HEAD
         "http://127.0.0.1:4200","https://emailautomationreporting.netlify.app","https://outreach.powersalesautomation.com"
+=======
+        "http://127.0.0.1:4200","https://emailautomationreporting.netlify.app,https://outreach.powersalesautomation.com"
+>>>>>>> 184cc5c060a7a7cfdb11fe76dd3da5048fec4be9
     )

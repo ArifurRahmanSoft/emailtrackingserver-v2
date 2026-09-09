@@ -16,7 +16,11 @@ DEFAULT_CORS_ALLOWED_ORIGINS = (
     "http://localhost:4200",
     "http://127.0.0.1:4200",
     "https://emailautomationreporting.netlify.app",
+<<<<<<< HEAD
     "https://outreach.powersalesautomation.com"
+=======
+    "https://outreach.powersalesautomation.com",
+>>>>>>> 184cc5c060a7a7cfdb11fe76dd3da5048fec4be9
 )
 
 
