@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from starlette.staticfiles import StaticFiles
 
 from app.api.auth_routes import (
     auth_service,
@@ -24,6 +25,11 @@ from app.api.campaign_routes import campaign_service, router as campaign_router
 from app.api.client_report_routes import (
     client_report_service,
     router as client_report_router,
+)
+from app.api.email_template_routes import (
+    router as email_template_router,
+    template_image_service,
+    template_service,
 )
 from app.api.attachment_routes import attachment_service, router as attachment_router
 from app.api.attachment_download_routes import router as attachment_download_router
@@ -77,6 +83,20 @@ async def lifespan(_: FastAPI):
         logger.info("Campaign Management campaigns table ready")
     except Exception as exc:
         logger.error("Campaign Management initialization failed: %s", exc, exc_info=True)
+    try:
+        template_service.initialize()
+        logger.info("Email template table ready")
+    except Exception as exc:
+        logger.error("Email template initialization failed: %s", exc, exc_info=True)
+    try:
+        template_image_service.initialize()
+        logger.info("Email template image upload folder ready")
+    except Exception as exc:
+        logger.error(
+            "Email template image upload folder initialization failed: %s",
+            exc,
+            exc_info=True,
+        )
     logger.info(
         "%s started; environment=%s public_base_url=%s",
         settings.application_name,
@@ -90,6 +110,7 @@ async def lifespan(_: FastAPI):
     yield
     client_report_service.dispose()
     campaign_service.dispose()
+    template_service.dispose()
     auth_service.dispose()
     attachment_service.dispose()
     database_service.dispose()
@@ -181,6 +202,13 @@ app.include_router(auth_router)
 app.include_router(system_users_router)
 app.include_router(campaign_router)
 app.include_router(client_report_router)
+app.include_router(email_template_router)
+template_image_service.initialize()
+app.mount(
+    "/uploads/email_templates",
+    StaticFiles(directory=template_image_service.upload_folder),
+    name="email_template_uploads",
+)
 
 
 @app.exception_handler(StarletteHTTPException)
